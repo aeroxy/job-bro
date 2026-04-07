@@ -64,6 +64,7 @@ export function HistoryDetail({ analysisId, onBack }: HistoryDetailProps) {
     preference: record.report.evaluators.preference.status === 'fulfilled' ? 'completed' as const : 'error' as const,
     risk: record.report.evaluators.risk.status === 'fulfilled' ? 'completed' as const : 'error' as const,
     growth: record.report.evaluators.growth.status === 'fulfilled' ? 'completed' as const : 'error' as const,
+    summary: 'completed' as const,
   }
 
   return (

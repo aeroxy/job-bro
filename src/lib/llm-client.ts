@@ -1,4 +1,4 @@
-import type { LLMConfig } from '@/types/profile'
+import type { LLMConfig, UserProfile } from '@/types/profile'
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -16,9 +16,9 @@ interface ChatCompletionResponse {
 export async function chatCompletion(
   config: LLMConfig,
   messages: ChatMessage[],
-  options?: { temperature?: number; max_tokens?: number; json_mode?: boolean }
+  options?: { temperature?: number; max_tokens?: number; json_mode?: boolean; signal?: AbortSignal }
 ): Promise<string> {
-  const { temperature = 0.3, max_tokens = 2000, json_mode = true } = options ?? {}
+  const { temperature = 0.3, max_tokens = 2000, json_mode = true, signal } = options ?? {}
 
   const body: Record<string, unknown> = {
     model: config.model,
@@ -62,7 +62,7 @@ export async function chatCompletion(
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
       })
 
       clearTimeout(timeout)
@@ -121,11 +121,12 @@ export function parseJSON<T>(raw: string): T {
 // Validate that all specified fields are finite numbers 0-1.
 // Returns an error message string, or null if valid.
 export function validateNumbers(
-  obj: Record<string, unknown>,
+  obj: object,
   fields: string[]
 ): string | null {
+  const record = obj as Record<string, unknown>
   for (const field of fields) {
-    const val = obj[field]
+    const val = record[field]
     if (typeof val !== 'number' || !isFinite(val) || val < 0 || val > 1) {
       return `"${field}" must be a number 0–1, got ${JSON.stringify(val)}`
     }
@@ -134,12 +135,13 @@ export function validateNumbers(
 }
 
 // Run an evaluator with one context-aware retry if validation fails.
-export async function runWithValidation<T extends Record<string, unknown>>(
+export async function runWithValidation<T extends object>(
   config: LLMConfig,
   messages: ChatMessage[],
-  validate: (result: T) => string | null
+  validate: (result: T) => string | null,
+  signal?: AbortSignal
 ): Promise<T> {
-  const raw = await chatCompletion(config, messages)
+  const raw = await chatCompletion(config, messages, { signal })
   const result = parseJSON<T>(raw)
 
   const error = validate(result)
@@ -155,7 +157,7 @@ export async function runWithValidation<T extends Record<string, unknown>>(
     },
   ]
 
-  const retryRaw = await chatCompletion(config, retryMessages)
+  const retryRaw = await chatCompletion(config, retryMessages, { signal })
   return parseJSON<T>(retryRaw)
 }
 
@@ -177,3 +179,64 @@ export function buildMessages(
 function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+// --- Cache-friendly message building ---
+
+const PROFILE_PREAMBLE = `You are an AI career evaluation agent. You will analyze job postings against a candidate's profile.`
+
+const OUTPUT_FORMAT_PROMPT = `<output_rules>
+- Follow the output format and schema specified in the system instructions exactly.
+- Do not include any preamble, explanation, or unsolicited commentary.
+- Do not wrap responses in markdown fences unless explicitly requested.
+</output_rules>`
+
+export function buildProfileContext(profile: UserProfile): string {
+  const parts: string[] = [PROFILE_PREAMBLE, '', '<candidate_profile>', '']
+
+  if (profile.resume.trim()) {
+    parts.push(`<resume>\n${profile.resume.trim()}\n</resume>`, '')
+  }
+  if (profile.projects.trim()) {
+    parts.push(`<projects>\n${profile.projects.trim()}\n</projects>`, '')
+  }
+  if (profile.salary_expectation.trim()) {
+    parts.push(`<salary_expectation>\n${profile.salary_expectation.trim()}\n</salary_expectation>`, '')
+  }
+
+  const prefs = profile.preferences
+  const prefParts: string[] = []
+  prefParts.push(`<remote_preference>${prefs.remote_preference}</remote_preference>`)
+  if (prefs.preferred_locations.length > 0)
+    prefParts.push(`<preferred_locations>${JSON.stringify(prefs.preferred_locations)}</preferred_locations>`)
+  prefParts.push(`<company_size_preference>${prefs.company_size_preference}</company_size_preference>`)
+  if (prefs.industries_of_interest.length > 0)
+    prefParts.push(`<industries_of_interest>${JSON.stringify(prefs.industries_of_interest)}</industries_of_interest>`)
+  if (prefs.deal_breakers.length > 0)
+    prefParts.push(`<deal_breakers>${JSON.stringify(prefs.deal_breakers)}</deal_breakers>`)
+  if (prefs.years_of_experience > 0)
+    prefParts.push(`<years_of_experience>${prefs.years_of_experience}</years_of_experience>`)
+
+  parts.push(`<preferences>\n${prefParts.join('\n')}\n</preferences>`, '')
+  parts.push('</candidate_profile>')
+
+  return parts.join('\n')
+}
+
+// Shared cacheable prefix: [custom?, profile, output_rules, jd]
+// The JD is included here because it is identical across all evaluators for a given job,
+// extending the cached prefix further before the per-evaluator prompt breaks it.
+export function buildSharedPrefix(
+  customPrompt: string | undefined,
+  profile: UserProfile,
+  jobContent: string
+): ChatMessage[] {
+  const messages: ChatMessage[] = []
+  if (customPrompt?.trim()) {
+    messages.push({ role: 'system', content: customPrompt.trim() })
+  }
+  messages.push({ role: 'system', content: buildProfileContext(profile) })
+  messages.push({ role: 'system', content: OUTPUT_FORMAT_PROMPT })
+  messages.push({ role: 'system', content: `<jd>\n${jobContent}\n</jd>` })
+  return messages
+}
+

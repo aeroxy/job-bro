@@ -10,7 +10,7 @@ import type {
 } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 
-interface EvaluatorResults {
+export interface EvaluatorResults {
   job_fit: EvaluatorStatus<JobFitResult>
   salary: EvaluatorStatus<SalaryResult>
   preference: EvaluatorStatus<PreferenceResult>
@@ -33,7 +33,7 @@ const WEIGHTS = {
   growth: 0.15,
 }
 
-function getScore(evaluators: EvaluatorResults): number {
+export function getScore(evaluators: EvaluatorResults): number {
   let totalWeight = 0
   let weightedSum = 0
 
@@ -46,11 +46,9 @@ function getScore(evaluators: EvaluatorResults): number {
   // Salary (convert alignment to score)
   if (evaluators.salary.status === 'fulfilled' && evaluators.salary.result) {
     const salaryScore =
-      evaluators.salary.result.expectation_alignment === 'within'
-        ? 0.9
-        : evaluators.salary.result.expectation_alignment === 'above'
-          ? 0.6
-          : 0.4
+      evaluators.salary.result.expectation_alignment === 'below'
+        ? 0.4
+        : 0.9 // 'within' or 'above' (job pays at or above expectations) are both good
     const riskPenalty = evaluators.salary.result.risk_flag ? 0.2 : 0
     weightedSum += Math.max(0, salaryScore - riskPenalty) * WEIGHTS.salary
     totalWeight += WEIGHTS.salary
@@ -84,7 +82,7 @@ function getScore(evaluators: EvaluatorResults): number {
   return Math.round((weightedSum / totalWeight) * 100)
 }
 
-function getVerdict(score: number, evaluators: EvaluatorResults): Verdict {
+export function getVerdict(score: number, evaluators: EvaluatorResults): Verdict {
   // Override: high risk + deal-breaker conflicts → Skip
   const hasHighRisk =
     evaluators.risk.status === 'fulfilled' &&
@@ -152,14 +150,13 @@ function collectNegotiationTips(evaluators: EvaluatorResults): string[] {
 
   if (evaluators.salary.status === 'fulfilled' && evaluators.salary.result) {
     const s = evaluators.salary.result
-    if (s.expectation_alignment === 'within' || s.expectation_alignment === 'above') {
-      tips.push(
-        `Market range is $${s.estimated_range.min.toLocaleString()}-$${s.estimated_range.max.toLocaleString()} ${s.estimated_range.currency}. Your expectation is ${s.expectation_alignment} this range.`
-      )
+    const rangeStr = `$${s.estimated_range.min.toLocaleString()}–$${s.estimated_range.max.toLocaleString()} ${s.estimated_range.currency}`
+    if (s.expectation_alignment === 'above') {
+      tips.push(`Market range (${rangeStr}) exceeds your expectation — you have room to negotiate up.`)
+    } else if (s.expectation_alignment === 'within') {
+      tips.push(`Your expectation aligns with the market range (${rangeStr}).`)
     } else {
-      tips.push(
-        `Market range is $${s.estimated_range.min.toLocaleString()}-$${s.estimated_range.max.toLocaleString()} ${s.estimated_range.currency}. Consider adjusting expectations or negotiating based on your unique value.`
-      )
+      tips.push(`Market range (${rangeStr}) is below your expectation — negotiate hard or weigh whether the other benefits justify the gap.`)
     }
   }
 
@@ -175,11 +172,12 @@ function collectNegotiationTips(evaluators: EvaluatorResults): string[] {
 
 export function aggregate(
   job: ExtractedJob,
-  evaluators: EvaluatorResults
+  evaluators: EvaluatorResults,
+  reasoningOverride?: string
 ): AggregatedReport {
   const overall_score = getScore(evaluators)
   const verdict = getVerdict(overall_score, evaluators)
-  const reasoning = buildReasoning(evaluators, verdict, overall_score)
+  const reasoning = reasoningOverride || buildReasoning(evaluators, verdict, overall_score)
   const key_risks = collectRisks(evaluators)
   const negotiation_tips = collectNegotiationTips(evaluators)
 

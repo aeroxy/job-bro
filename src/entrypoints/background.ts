@@ -1,6 +1,9 @@
+import { runResumeGenerator } from '@/evaluators/resume'
 import { runAllEvaluators } from '@/evaluators/runner'
 import { getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
-import type { ExtractionResponse, Message } from '@/types/messages'
+import type { ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
+
+let analysisController: AbortController | null = null
 
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
@@ -13,9 +16,28 @@ export default defineBackground(() => {
         })
         return true
 
+      case 'CANCEL_ANALYSIS':
+        analysisController?.abort()
+        analysisController = null
+        return false
+
       case 'ANALYZE_JD':
-        handleAnalyzeJD(message.payload.job).then(sendResponse).catch((e) => {
+        analysisController?.abort()
+        analysisController = new AbortController()
+        handleAnalyzeJD(message.payload.job, analysisController.signal).then(sendResponse).catch((e) => {
           sendResponse({ type: 'ANALYSIS_ERROR', error: (e as Error).message })
+        })
+        return true
+
+      case 'GENERATE_RESUME':
+        handleGenerateResume(
+          message.payload.job,
+          message.payload.analysisContext,
+          message.payload.previousResume,
+          message.payload.previousSummary,
+          message.payload.comment
+        ).then(sendResponse).catch((e) => {
+          sendResponse({ type: 'RESUME_ERROR', error: (e as Error).message })
         })
         return true
 
@@ -85,7 +107,7 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
   })
 }
 
-async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob) {
+async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal) {
   const profile = await getProfile()
   if (!profile) {
     return { type: 'ANALYSIS_ERROR', error: 'No profile configured. Set up your profile first.' }
@@ -109,9 +131,42 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob) {
   }
 
   try {
-    const report = await runAllEvaluators(job, profile, config, customPrompt || undefined, onProgress)
+    const report = await runAllEvaluators(job, profile, config, customPrompt || undefined, onProgress, signal)
     return { type: 'ANALYSIS_RESULT', payload: report }
   } catch (e) {
     return { type: 'ANALYSIS_ERROR', error: (e as Error).message }
+  }
+}
+
+async function handleGenerateResume(
+  job: import('@/types/job').ExtractedJob,
+  analysisContext?: string,
+  previousResume?: string,
+  previousSummary?: string,
+  comment?: string
+): Promise<ResumeResponse> {
+  const profile = await getProfile()
+  if (!profile) {
+    return { type: 'RESUME_ERROR', error: 'No profile configured. Set up your profile first.' }
+  }
+
+  const config = await getLLMConfig()
+  if (!config || !config.base_url || !config.model) {
+    return { type: 'RESUME_ERROR', error: 'No LLM configured. Set up base URL and model in Settings.' }
+  }
+
+  const customPrompt = await getCustomPrompt()
+
+  try {
+    const { jobToMarkdown } = await import('@/extractor/markdown')
+    const jobMarkdown = jobToMarkdown(job)
+    const result = await runResumeGenerator(
+      jobMarkdown, profile, config,
+      customPrompt || undefined,
+      analysisContext, previousResume, previousSummary, comment
+    )
+    return { type: 'RESUME_RESULT', payload: { markdown: result.resume, summary: result.summary } }
+  } catch (e) {
+    return { type: 'RESUME_ERROR', error: (e as Error).message }
   }
 }

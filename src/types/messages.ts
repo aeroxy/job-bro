@@ -50,7 +50,36 @@ export type AnalysisErrorMessage = {
   error: string
 }
 
+// Sidebar -> Background: generate a tailored resume
+export type GenerateResumeMessage = {
+  type: 'GENERATE_RESUME'
+  payload: {
+    job: ExtractedJob
+    analysisContext?: string  // formatted summary of the AggregatedReport
+    previousResume?: string
+    previousSummary?: string
+    comment?: string
+  }
+}
+
+// Background -> Sidebar: resume generated successfully
+export type ResumeResultMessage = {
+  type: 'RESUME_RESULT'
+  payload: { markdown: string; summary: string }
+}
+
+// Background -> Sidebar: resume generation error
+export type ResumeErrorMessage = {
+  type: 'RESUME_ERROR'
+  error: string
+}
+
 export type ExtractionResponse = JDExtractedMessage | JDExtractionFailedMessage
+export type ResumeResponse = ResumeResultMessage | ResumeErrorMessage
+
+export type CancelAnalysisMessage = {
+  type: 'CANCEL_ANALYSIS'
+}
 
 export type Message =
   | RequestExtractionMessage
@@ -58,6 +87,10 @@ export type Message =
   | JDExtractedMessage
   | JDExtractionFailedMessage
   | AnalyzeJDMessage
+  | CancelAnalysisMessage
   | AnalysisResultMessage
   | AnalysisProgressMessage
   | AnalysisErrorMessage
+  | GenerateResumeMessage
+  | ResumeResultMessage
+  | ResumeErrorMessage

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
@@ -12,6 +12,7 @@ export interface EvaluatorProgress {
   preference: 'pending' | 'running' | 'completed' | 'error'
   risk: 'pending' | 'running' | 'completed' | 'error'
   growth: 'pending' | 'running' | 'completed' | 'error'
+  summary: 'pending' | 'running' | 'completed' | 'error'
 }
 
 const INITIAL_PROGRESS: EvaluatorProgress = {
@@ -20,6 +21,7 @@ const INITIAL_PROGRESS: EvaluatorProgress = {
   preference: 'pending',
   risk: 'pending',
   growth: 'pending',
+  summary: 'pending',
 }
 
 export function useAnalysis() {
@@ -28,6 +30,7 @@ export function useAnalysis() {
   const [report, setReport] = useState<AggregatedReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<EvaluatorProgress>(INITIAL_PROGRESS)
+  const cancelledRef = useRef(false)
 
   // Listen for progress updates from background
   useEffect(() => {
@@ -70,6 +73,7 @@ export function useAnalysis() {
   }, [])
 
   const analyze = useCallback(async (extractedJob: ExtractedJob) => {
+    cancelledRef.current = false
     setStatus('analyzing')
     setError(null)
     setProgress(INITIAL_PROGRESS)
@@ -79,6 +83,8 @@ export function useAnalysis() {
         type: 'ANALYZE_JD',
         payload: { job: extractedJob },
       })
+
+      if (cancelledRef.current) return null
 
       if (response.type === 'ANALYSIS_RESULT') {
         setReport(response.payload)
@@ -90,13 +96,23 @@ export function useAnalysis() {
         return null
       }
     } catch (e) {
+      if (cancelledRef.current) return null
       setError((e as Error).message)
       setStatus('error')
       return null
     }
   }, [])
 
+  const stop = useCallback(() => {
+    cancelledRef.current = true
+    chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS' }).catch(() => {})
+    setStatus('idle')
+    setError(null)
+    setProgress(INITIAL_PROGRESS)
+  }, [])
+
   const reset = useCallback(() => {
+    cancelledRef.current = true
     setStatus('idle')
     setJob(null)
     setReport(null)
@@ -112,6 +128,7 @@ export function useAnalysis() {
     progress,
     extract,
     analyze,
+    stop,
     reset,
   }
 }

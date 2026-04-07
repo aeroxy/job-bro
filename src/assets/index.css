@@ -96,3 +96,45 @@
     @apply bg-background text-foreground;
   }
 }
+
+.resume-preview h1 {
+  font-size: 1.4em;
+  font-weight: 700;
+  margin-bottom: 0.2em;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0.3em;
+}
+.resume-preview h2 {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin-top: 1em;
+  margin-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.15em;
+}
+.resume-preview h3 {
+  font-size: 1em;
+  font-weight: 600;
+  margin-top: 0.6em;
+  margin-bottom: 0.2em;
+}
+.resume-preview p {
+  margin: 0.3em 0;
+  line-height: 1.5;
+}
+.resume-preview ul,
+.resume-preview ol {
+  margin: 0.3em 0;
+  padding-left: 1.4em;
+}
+.resume-preview li {
+  margin: 0.15em 0;
+}
+.resume-preview strong {
+  font-weight: 600;
+}
+.resume-preview hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
+}
