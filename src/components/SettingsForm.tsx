@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import type { LLMConfig } from '@/types/profile'
 
@@ -105,6 +106,60 @@ export function SettingsForm({
               <p className="text-[10px] text-muted-foreground">
                 JSON object of extra headers. Use for APIs that authenticate via headers instead of Bearer token.
               </p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs">Stream Mode</Label>
+                <p className="text-[10px] text-muted-foreground">
+                  Use SSE streaming for LLM calls. Enable if you experience gateway timeouts on large requests.
+                </p>
+              </div>
+              <Switch
+                checked={config.stream_mode ?? false}
+                onCheckedChange={(checked) => setConfig((p) => ({ ...p, stream_mode: checked }))}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Request Timeout (s)</Label>
+                <Input
+                  type="number"
+                  min={5}
+                  placeholder="30"
+                  value={config.timeout ?? ''}
+                  onChange={(e) =>
+                    setConfig((p) => ({
+                      ...p,
+                      timeout: e.target.value ? Number(e.target.value) : undefined,
+                    }))
+                  }
+                  className="text-xs"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  {config.stream_mode ? 'Not used in stream mode' : 'Max wait for full response'}
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Stream Timeout (s)</Label>
+                <Input
+                  type="number"
+                  min={5}
+                  placeholder="60"
+                  value={config.stream_timeout ?? ''}
+                  onChange={(e) =>
+                    setConfig((p) => ({
+                      ...p,
+                      stream_timeout: e.target.value ? Number(e.target.value) : undefined,
+                    }))
+                  }
+                  className="text-xs"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  {config.stream_mode ? 'Max inactivity between chunks' : 'Not used without stream mode'}
+                </p>
+              </div>
             </div>
           </div>
         </div>

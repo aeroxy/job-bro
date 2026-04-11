@@ -1,9 +1,10 @@
 import type { AggregatedReport } from './evaluation'
 import type { ExtractedJob } from './job'
 
-// Sidebar -> Background: request JD extraction from the active tab
+// Sidebar -> Background: request JD extraction from a specific tab
 export type RequestExtractionMessage = {
   type: 'REQUEST_EXTRACTION'
+  tabId: number
 }
 
 // Background -> Content Script: extract JD from the page
@@ -26,6 +27,7 @@ export type JDExtractionFailedMessage = {
 // Sidebar -> Background: analyze the extracted JD
 export type AnalyzeJDMessage = {
   type: 'ANALYZE_JD'
+  tabId: number
   payload: { job: ExtractedJob }
 }
 
@@ -39,6 +41,7 @@ export type AnalysisResultMessage = {
 export type AnalysisProgressMessage = {
   type: 'ANALYSIS_PROGRESS'
   payload: {
+    tabId: number
     evaluator: string
     status: 'running' | 'completed' | 'error'
   }
@@ -79,6 +82,7 @@ export type ResumeResponse = ResumeResultMessage | ResumeErrorMessage
 
 export type CancelAnalysisMessage = {
   type: 'CANCEL_ANALYSIS'
+  tabId: number
 }
 
 export type Message =

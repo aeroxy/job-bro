@@ -3,31 +3,55 @@ import { runAllEvaluators } from '@/evaluators/runner'
 import { getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
 import type { ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
 
-let analysisController: AbortController | null = null
+const analysisControllers = new Map<number, AbortController>()
 
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
+  // Clean up controllers when tabs are closed
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    const controller = analysisControllers.get(tabId)
+    if (controller) {
+      controller.abort()
+      analysisControllers.delete(tabId)
+    }
+  })
+
   chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
     switch (message.type) {
       case 'REQUEST_EXTRACTION':
-        handleRequestExtraction().then(sendResponse).catch((e) => {
+        handleRequestExtraction(message.tabId).then(sendResponse).catch((e) => {
           sendResponse({ type: 'JD_EXTRACTION_FAILED', error: (e as Error).message })
         })
         return true
 
-      case 'CANCEL_ANALYSIS':
-        analysisController?.abort()
-        analysisController = null
+      case 'CANCEL_ANALYSIS': {
+        const controller = analysisControllers.get(message.tabId)
+        if (controller) {
+          controller.abort()
+          analysisControllers.delete(message.tabId)
+        }
         return false
+      }
 
-      case 'ANALYZE_JD':
-        analysisController?.abort()
-        analysisController = new AbortController()
-        handleAnalyzeJD(message.payload.job, analysisController.signal).then(sendResponse).catch((e) => {
+      case 'ANALYZE_JD': {
+        const tabId = message.tabId
+        // Abort any existing analysis for this tab
+        const existing = analysisControllers.get(tabId)
+        if (existing) {
+          existing.abort()
+        }
+        const controller = new AbortController()
+        analysisControllers.set(tabId, controller)
+        handleAnalyzeJD(message.payload.job, controller.signal, tabId).then((result) => {
+          analysisControllers.delete(tabId)
+          sendResponse(result)
+        }).catch((e) => {
+          analysisControllers.delete(tabId)
           sendResponse({ type: 'ANALYSIS_ERROR', error: (e as Error).message })
         })
         return true
+      }
 
       case 'GENERATE_RESUME':
         handleGenerateResume(
@@ -47,11 +71,11 @@ export default defineBackground(() => {
   })
 })
 
-async function handleRequestExtraction(): Promise<ExtractionResponse> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+async function handleRequestExtraction(tabId: number): Promise<ExtractionResponse> {
+  const tab = await chrome.tabs.get(tabId).catch(() => null)
 
-  if (!tab?.id) {
-    return { type: 'JD_EXTRACTION_FAILED', error: 'No active tab found' }
+  if (!tab) {
+    return { type: 'JD_EXTRACTION_FAILED', error: 'Tab not found' }
   }
 
   if (!tab.url?.includes('linkedin.com/jobs')) {
@@ -107,7 +131,7 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
   })
 }
 
-async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal) {
+async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal, tabId: number) {
   const profile = await getProfile()
   if (!profile) {
     return { type: 'ANALYSIS_ERROR', error: 'No profile configured. Set up your profile first.' }
@@ -124,7 +148,7 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
     // Broadcast progress to all extension pages (sidebar listens)
     chrome.runtime.sendMessage({
       type: 'ANALYSIS_PROGRESS',
-      payload: { evaluator, status },
+      payload: { tabId, evaluator, status },
     }).catch(() => {
       // Ignore - no listeners
     })

@@ -19,6 +19,9 @@ export interface LLMConfig {
   model: string
   api_key?: string
   custom_headers?: string // JSON string of key-value pairs, e.g. '{"X-API-Key": "abc"}'
+  stream_mode?: boolean
+  timeout?: number        // non-stream request timeout in seconds (default 30)
+  stream_timeout?: number // per-chunk inactivity timeout in seconds (default 60)
 }
 
 export const DEFAULT_PREFERENCES: JobPreferences = {

@@ -10,9 +10,9 @@ import { ResumeView } from '@/components/ResumeView'
 import { SettingsForm } from '@/components/SettingsForm'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-import { useAnalysis } from '@/hooks/useAnalysis'
+import { useActiveTab } from '@/hooks/useActiveTab'
 import { useProfile } from '@/hooks/useProfile'
-import { useResumeGenerator } from '@/hooks/useResumeGenerator'
+import { useTabSessions } from '@/hooks/useTabSessions'
 import { saveAnalysis } from '@/lib/db'
 import type { AggregatedReport } from '@/types/evaluation'
 
@@ -48,16 +48,16 @@ function formatAnalysisContext(report: AggregatedReport): string {
   return lines.join('\n')
 }
 
-type View =
-  | { name: 'main' }
+// Global views not tied to any specific tab
+type GlobalView =
   | { name: 'profile' }
   | { name: 'settings' }
   | { name: 'history' }
   | { name: 'history-detail'; analysisId: string }
-  | { name: 'resume' }
 
 export default function App() {
-  const [view, setView] = useState<View>({ name: 'main' })
+  // Global navigation (profile, settings, history are not tab-specific)
+  const [globalView, setGlobalView] = useState<GlobalView | null>(null)
 
   const {
     profile,
@@ -71,7 +71,11 @@ export default function App() {
     updateCustomPrompt,
   } = useProfile()
 
+  const { activeTabId, onTabRemoved } = useActiveTab()
+
   const {
+    view: tabView,
+    setView: setTabView,
     status,
     job,
     report,
@@ -81,17 +85,14 @@ export default function App() {
     analyze,
     stop,
     reset,
-  } = useAnalysis()
-
-  const {
-    status: resumeStatus,
-    markdown: resumeMarkdown,
-    error: resumeError,
-    generate: generateResume,
-    regenerate: regenerateResume,
-    setMarkdown: setResumeMarkdown,
-    reset: resetResume,
-  } = useResumeGenerator()
+    resumeStatus,
+    resumeMarkdown,
+    resumeError,
+    generateResume,
+    regenerateResume,
+    setResumeMarkdown,
+    resetResume,
+  } = useTabSessions(activeTabId, onTabRemoved)
 
   const handleExtract = useCallback(async () => {
     await extract()
@@ -116,53 +117,54 @@ export default function App() {
 
   const handleGenerateResume = useCallback(async () => {
     if (!job) return
-    setView({ name: 'resume' })
-    await generateResume(job, report ? formatAnalysisContext(report) : undefined)
-  }, [job, report, generateResume])
+    setTabView({ name: 'resume' })
+    generateResume(job, report ? formatAnalysisContext(report) : undefined)
+  }, [job, report, generateResume, setTabView])
 
   // --- View routing ---
 
-  if (view.name === 'profile') {
+  // Global views take priority over per-tab views
+  if (globalView?.name === 'profile') {
     return (
       <ProfileForm
         profile={profile}
         onSave={updateProfile}
-        onBack={() => setView({ name: 'main' })}
+        onBack={() => setGlobalView(null)}
       />
     )
   }
 
-  if (view.name === 'settings') {
+  if (globalView?.name === 'settings') {
     return (
       <SettingsForm
         llmConfig={llmConfig}
         customPrompt={customPrompt}
         onSaveLLM={updateLLMConfig}
         onSavePrompt={updateCustomPrompt}
-        onBack={() => setView({ name: 'main' })}
+        onBack={() => setGlobalView(null)}
       />
     )
   }
 
-  if (view.name === 'history') {
+  if (globalView?.name === 'history') {
     return (
       <HistoryList
-        onSelect={(id) => setView({ name: 'history-detail', analysisId: id })}
-        onBack={() => setView({ name: 'main' })}
+        onSelect={(id) => setGlobalView({ name: 'history-detail', analysisId: id })}
+        onBack={() => setGlobalView(null)}
       />
     )
   }
 
-  if (view.name === 'history-detail') {
+  if (globalView?.name === 'history-detail') {
     return (
       <HistoryDetail
-        analysisId={view.analysisId}
-        onBack={() => setView({ name: 'history' })}
+        analysisId={globalView.analysisId}
+        onBack={() => setGlobalView({ name: 'history' })}
       />
     )
   }
 
-  if (view.name === 'resume') {
+  if (tabView.name === 'resume') {
     return (
       <ResumeView
         job={job!}
@@ -173,7 +175,7 @@ export default function App() {
         onRegenerate={(comment) => job && regenerateResume(job, comment)}
         onBack={() => {
           resetResume()
-          setView({ name: 'main' })
+          setTabView({ name: 'main' })
         }}
       />
     )
@@ -193,7 +195,7 @@ export default function App() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setView({ name: 'profile' })}
+            onClick={() => setGlobalView({ name: 'profile' })}
             className="cursor-pointer"
           >
             <User className="size-3.5" />
@@ -201,7 +203,7 @@ export default function App() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setView({ name: 'history' })}
+            onClick={() => setGlobalView({ name: 'history' })}
             className="cursor-pointer"
           >
             <History className="size-3.5" />
@@ -209,7 +211,7 @@ export default function App() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setView({ name: 'settings' })}
+            onClick={() => setGlobalView({ name: 'settings' })}
             className="cursor-pointer"
           >
             <Settings className="size-3.5" />
@@ -225,7 +227,7 @@ export default function App() {
             <p className="text-xs font-medium">Setup needed:</p>
             {!isProfileComplete && (
               <button
-                onClick={() => setView({ name: 'profile' })}
+                onClick={() => setGlobalView({ name: 'profile' })}
                 className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
               >
                 <User className="size-3" />
@@ -234,7 +236,7 @@ export default function App() {
             )}
             {!isLLMConfigured && (
               <button
-                onClick={() => setView({ name: 'settings' })}
+                onClick={() => setGlobalView({ name: 'settings' })}
                 className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
               >
                 <Settings className="size-3" />

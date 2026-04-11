@@ -1,7 +1,7 @@
 {
   "name": "job-bro",
   "description": "AI-powered LinkedIn job posting analyzer Chrome extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "author": "Aero Wang <aero.windwalker@gmail.com>",
@@ -21,7 +21,6 @@
     "dev": "wxt",
     "build": "wxt build",
     "zip": "wxt zip",
-    "package": "bun run build && cd .output/chrome-mv3 && zip -r ../job-bro.zip . && cd ../.. && mv .output/job-bro.zip .output/job-bro.crx",
     "postinstall": "wxt prepare"
   },
   "devDependencies": {

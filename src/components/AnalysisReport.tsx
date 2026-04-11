@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 
 import type { AggregatedReport } from '@/types/evaluation'
-import type { EvaluatorProgress } from '@/hooks/useAnalysis'
+import type { EvaluatorProgress } from '@/hooks/useTabSessions'
 import { EvaluatorCard } from './EvaluatorCard'
 import { ScoreBar } from './ScoreBar'
 import { VerdictBadge } from './VerdictBadge'

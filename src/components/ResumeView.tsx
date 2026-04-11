@@ -4,7 +4,7 @@ import * as Tabs from '@radix-ui/react-tabs'
 import { marked } from 'marked'
 
 import type { ExtractedJob } from '@/types/job'
-import type { ResumeStatus } from '@/hooks/useResumeGenerator'
+import type { ResumeStatus } from '@/hooks/useTabSessions'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { downloadMarkdown, downloadPDF, makeFilename } from '@/lib/download'

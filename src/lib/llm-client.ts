@@ -18,7 +18,12 @@ export async function chatCompletion(
   messages: ChatMessage[],
   options?: { temperature?: number; max_tokens?: number; json_mode?: boolean; signal?: AbortSignal }
 ): Promise<string> {
+  if (config.stream_mode) {
+    return streamCompletion(config, messages, options)
+  }
+
   const { temperature = 0.3, max_tokens = 2000, json_mode = true, signal } = options ?? {}
+  const timeoutMs = (config.timeout ?? 30) * 1000
 
   const body: Record<string, unknown> = {
     model: config.model,
@@ -36,12 +41,11 @@ export async function chatCompletion(
   const url = `${baseUrl}/chat/completions`
 
   let lastError: Error | null = null
-  // Only retry on HTTP-level errors (429/5xx), not on network failures
   const httpRetryDelays = [1000, 3000]
 
   for (let attempt = 0; attempt <= 2; attempt++) {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30000)
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -87,8 +91,6 @@ export async function chatCompletion(
       return content
     } catch (e) {
       clearTimeout(timeout)
-      // Don't retry on network-level failures (ERR_FAILED, AbortError etc.)
-      // — they won't resolve with a simple retry
       throw e instanceof Error ? e : new Error(String(e))
     }
   }
@@ -174,6 +176,134 @@ export function buildMessages(
   messages.push({ role: 'system', content: internalPrompt })
   messages.push({ role: 'user', content: userContent })
   return messages
+}
+
+async function streamCompletion(
+  config: LLMConfig,
+  messages: ChatMessage[],
+  options?: { temperature?: number; max_tokens?: number; json_mode?: boolean; signal?: AbortSignal }
+): Promise<string> {
+  const { temperature = 0.3, max_tokens = 2000, json_mode = true, signal } = options ?? {}
+  const inactivityMs = (config.stream_timeout ?? 60) * 1000
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages,
+    temperature,
+    max_tokens,
+    stream: true,
+  }
+
+  if (json_mode) {
+    body.response_format = { type: 'json_object' }
+  }
+
+  const baseUrl = config.base_url.trim().replace(/\/+$/, '')
+  if (!baseUrl) throw new Error('LLM base URL is not configured')
+  const url = `${baseUrl}/chat/completions`
+
+  let lastError: Error | null = null
+  const httpRetryDelays = [1000, 3000]
+
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    const controller = new AbortController()
+    let inactivityTimer: ReturnType<typeof setTimeout>
+    const resetTimer = () => {
+      clearTimeout(inactivityTimer)
+      inactivityTimer = setTimeout(() => controller.abort(), inactivityMs)
+    }
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+      if (config.api_key) {
+        headers['Authorization'] = `Bearer ${config.api_key}`
+      }
+
+      if (config.custom_headers) {
+        try {
+          Object.assign(headers, JSON.parse(config.custom_headers))
+        } catch {
+          // ignore malformed custom headers
+        }
+      }
+
+      resetTimer()
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+      })
+
+      if (!response.ok) {
+        clearTimeout(inactivityTimer!)
+        const errorText = await response.text().catch(() => 'Unknown error')
+        const retryable = [429, 500, 502, 503].includes(response.status)
+
+        if (retryable && attempt < 2) {
+          lastError = new Error(`HTTP ${response.status}: ${errorText}`)
+          await delay(httpRetryDelays[attempt])
+          continue
+        }
+
+        throw new Error(`LLM API error (${response.status}): ${errorText}`)
+      }
+
+      if (!response.body) throw new Error('Response body is null — streaming not supported by this endpoint')
+
+      resetTimer()
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let content = ''
+      let done = false
+
+      while (!done) {
+        const { value, done: streamDone } = await reader.read()
+        if (streamDone) break
+        resetTimer()
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6).trim()
+          if (data === '[DONE]') { done = true; break }
+          try {
+            const parsed = JSON.parse(data)
+            const delta = parsed.choices?.[0]?.delta?.content
+            if (typeof delta === 'string') content += delta
+          } catch { /* malformed chunk, skip */ }
+        }
+      }
+
+      // Flush remaining buffer
+      buffer += decoder.decode()
+      for (const line of buffer.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const data = line.slice(6).trim()
+        if (data === '[DONE]') break
+        try {
+          const parsed = JSON.parse(data)
+          const delta = parsed.choices?.[0]?.delta?.content
+          if (typeof delta === 'string') content += delta
+        } catch { /* malformed chunk, skip */ }
+      }
+
+      clearTimeout(inactivityTimer!)
+      if (!content) throw new Error('LLM returned empty streaming response')
+      return content
+
+    } catch (e) {
+      clearTimeout(inactivityTimer!)
+      throw e instanceof Error ? e : new Error(String(e))
+    }
+  }
+
+  throw lastError ?? new Error('LLM streaming request failed')
 }
 
 function delay(ms: number) {
