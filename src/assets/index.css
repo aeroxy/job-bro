@@ -138,3 +138,19 @@
   border-top: 1px solid var(--border);
   margin: 0.8em 0;
 }
+
+.pref-summary p {
+  margin: 0.2em 0;
+  line-height: 1.5;
+}
+.pref-summary ul {
+  margin: 0.2em 0;
+  padding-left: 1.2em;
+}
+.pref-summary li {
+  margin: 0.1em 0;
+}
+.pref-summary strong {
+  font-weight: 600;
+  color: var(--foreground);
+}

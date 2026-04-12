@@ -6,11 +6,11 @@ export interface UserProfile {
 }
 
 export interface JobPreferences {
-  remote_preference: 'remote' | 'hybrid' | 'onsite' | 'any'
-  preferred_locations: string[]
-  company_size_preference: 'startup' | 'mid' | 'large' | 'any'
-  industries_of_interest: string[]
-  deal_breakers: string[]
+  remote_preference: 'remote' | 'hybrid' | 'onsite' | 'no_preference'
+  preferred_locations: string
+  company_size_preference: 'startup' | 'mid' | 'large' | 'no_preference'
+  industries_of_interest: string
+  deal_breakers: string
   years_of_experience: number
 }
 
@@ -25,10 +25,10 @@ export interface LLMConfig {
 }
 
 export const DEFAULT_PREFERENCES: JobPreferences = {
-  remote_preference: 'any',
-  preferred_locations: [],
-  company_size_preference: 'any',
-  industries_of_interest: [],
-  deal_breakers: [],
+  remote_preference: 'no_preference',
+  preferred_locations: '',
+  company_size_preference: 'no_preference',
+  industries_of_interest: '',
+  deal_breakers: '',
   years_of_experience: 0,
 }

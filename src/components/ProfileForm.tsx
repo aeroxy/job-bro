@@ -1,11 +1,11 @@
-import { ArrowLeft } from 'lucide-react'
-import { useState } from 'react'
+import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react'
+import { useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import type { JobPreferences, UserProfile } from '@/types/profile'
+import type { UserProfile } from '@/types/profile'
 
 interface ProfileFormProps {
   profile: UserProfile
@@ -14,19 +14,35 @@ interface ProfileFormProps {
 }
 
 export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
-  const [form, setForm] = useState<UserProfile>(profile)
   const [saving, setSaving] = useState(false)
+  const [resumeOpen, setResumeOpen] = useState(false)
+  const [projectsOpen, setProjectsOpen] = useState(false)
 
-  const updatePrefs = (updates: Partial<JobPreferences>) => {
-    setForm((prev) => ({
-      ...prev,
-      preferences: { ...prev.preferences, ...updates },
-    }))
-  }
+  const resumeRef = useRef<HTMLTextAreaElement>(null)
+  const salaryRef = useRef<HTMLInputElement>(null)
+  const projectsRef = useRef<HTMLTextAreaElement>(null)
+  const remoteRef = useRef<HTMLSelectElement>(null)
+  const locationsRef = useRef<HTMLInputElement>(null)
+  const companySizeRef = useRef<HTMLSelectElement>(null)
+  const industriesRef = useRef<HTMLInputElement>(null)
+  const dealBreakersRef = useRef<HTMLInputElement>(null)
+  const yearsRef = useRef<HTMLInputElement>(null)
 
   const handleSave = async () => {
     setSaving(true)
-    await onSave(form)
+    await onSave({
+      resume: resumeRef.current?.value ?? profile.resume,
+      salary_expectation: salaryRef.current?.value ?? profile.salary_expectation,
+      projects: projectsRef.current?.value ?? profile.projects,
+      preferences: {
+        remote_preference: (remoteRef.current?.value ?? profile.preferences.remote_preference) as UserProfile['preferences']['remote_preference'],
+        preferred_locations: locationsRef.current?.value ?? profile.preferences.preferred_locations,
+        company_size_preference: (companySizeRef.current?.value ?? profile.preferences.company_size_preference) as UserProfile['preferences']['company_size_preference'],
+        industries_of_interest: industriesRef.current?.value ?? profile.preferences.industries_of_interest,
+        deal_breakers: dealBreakersRef.current?.value ?? profile.preferences.deal_breakers,
+        years_of_experience: parseInt(yearsRef.current?.value ?? '') || profile.preferences.years_of_experience,
+      },
+    })
     setSaving(false)
     onBack()
   }
@@ -41,36 +57,47 @@ export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
       </header>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
+
+        {/* Resume — collapsible, stays mounted */}
         <div className="space-y-1.5">
-          <Label className="text-xs">Resume</Label>
+          <button type="button" onClick={() => setResumeOpen((o) => !o)} className="flex items-center gap-1 text-xs font-medium">
+            {resumeOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            Resume
+          </button>
           <Textarea
+            ref={resumeRef}
             placeholder="Paste your resume here (markdown supported)..."
-            value={form.resume}
-            onChange={(e) => setForm((p) => ({ ...p, resume: e.target.value }))}
-            className="min-h-32 text-xs"
+            defaultValue={profile.resume}
+            className={`min-h-32 text-xs ${resumeOpen ? '' : 'hidden'}`}
           />
         </div>
 
-        <div className="space-y-1.5">
-          <Label className="text-xs">Salary Expectation</Label>
-          <Input
-            placeholder='e.g. "$150k-$180k base + equity"'
-            value={form.salary_expectation}
-            onChange={(e) => setForm((p) => ({ ...p, salary_expectation: e.target.value }))}
-            className="text-xs"
-          />
+        {/* Projects + Salary grouped */}
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <button type="button" onClick={() => setProjectsOpen((o) => !o)} className="flex items-center gap-1 text-xs font-medium">
+              {projectsOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+              Notable Projects
+            </button>
+            <Textarea
+              ref={projectsRef}
+              placeholder="Describe your key projects..."
+              defaultValue={profile.projects}
+              className={`min-h-20 text-xs ${projectsOpen ? '' : 'hidden'}`}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Salary Expectation</Label>
+            <Input
+              ref={salaryRef}
+              placeholder='e.g. "$150k-$180k base + equity"'
+              defaultValue={profile.salary_expectation}
+              className="text-xs"
+            />
+          </div>
         </div>
 
-        <div className="space-y-1.5">
-          <Label className="text-xs">Notable Projects</Label>
-          <Textarea
-            placeholder="Describe your key projects..."
-            value={form.projects}
-            onChange={(e) => setForm((p) => ({ ...p, projects: e.target.value }))}
-            className="min-h-20 text-xs"
-          />
-        </div>
-
+        {/* Preferences */}
         <div className="border-t pt-3">
           <h3 className="text-xs font-semibold mb-3">Preferences</h3>
 
@@ -78,11 +105,11 @@ export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
             <div className="space-y-1.5">
               <Label className="text-xs">Remote Preference</Label>
               <select
-                value={form.preferences.remote_preference}
-                onChange={(e) => updatePrefs({ remote_preference: e.target.value as JobPreferences['remote_preference'] })}
+                ref={remoteRef}
+                defaultValue={profile.preferences.remote_preference}
                 className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-xs"
               >
-                <option value="any">Any</option>
+                <option value="no_preference">No Preference</option>
                 <option value="remote">Remote</option>
                 <option value="hybrid">Hybrid</option>
                 <option value="onsite">On-site</option>
@@ -92,16 +119,9 @@ export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
             <div className="space-y-1.5">
               <Label className="text-xs">Preferred Locations</Label>
               <Input
-                placeholder="San Francisco, New York (comma separated)"
-                value={form.preferences.preferred_locations.join(', ')}
-                onChange={(e) =>
-                  updatePrefs({
-                    preferred_locations: e.target.value
-                      .split(',')
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  })
-                }
+                ref={locationsRef}
+                placeholder="San Francisco, New York"
+                defaultValue={profile.preferences.preferred_locations}
                 className="text-xs"
               />
             </div>
@@ -109,13 +129,11 @@ export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
             <div className="space-y-1.5">
               <Label className="text-xs">Company Size</Label>
               <select
-                value={form.preferences.company_size_preference}
-                onChange={(e) =>
-                  updatePrefs({ company_size_preference: e.target.value as JobPreferences['company_size_preference'] })
-                }
+                ref={companySizeRef}
+                defaultValue={profile.preferences.company_size_preference}
                 className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-xs"
               >
-                <option value="any">Any</option>
+                <option value="no_preference">No Preference</option>
                 <option value="startup">Startup</option>
                 <option value="mid">Mid-size</option>
                 <option value="large">Large/Enterprise</option>
@@ -125,16 +143,9 @@ export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
             <div className="space-y-1.5">
               <Label className="text-xs">Industries of Interest</Label>
               <Input
-                placeholder="AI/ML, fintech, healthcare (comma separated)"
-                value={form.preferences.industries_of_interest.join(', ')}
-                onChange={(e) =>
-                  updatePrefs({
-                    industries_of_interest: e.target.value
-                      .split(',')
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  })
-                }
+                ref={industriesRef}
+                placeholder="AI/ML, fintech, healthcare"
+                defaultValue={profile.preferences.industries_of_interest}
                 className="text-xs"
               />
             </div>
@@ -142,16 +153,9 @@ export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
             <div className="space-y-1.5">
               <Label className="text-xs">Deal Breakers</Label>
               <Input
-                placeholder='e.g. "no equity", "travel > 25%" (comma separated)'
-                value={form.preferences.deal_breakers.join(', ')}
-                onChange={(e) =>
-                  updatePrefs({
-                    deal_breakers: e.target.value
-                      .split(',')
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  })
-                }
+                ref={dealBreakersRef}
+                placeholder="no equity, travel > 25%"
+                defaultValue={profile.preferences.deal_breakers}
                 className="text-xs"
               />
             </div>
@@ -159,13 +163,11 @@ export function ProfileForm({ profile, onSave, onBack }: ProfileFormProps) {
             <div className="space-y-1.5">
               <Label className="text-xs">Years of Experience</Label>
               <Input
+                ref={yearsRef}
                 type="number"
                 min={0}
                 placeholder="0"
-                value={form.preferences.years_of_experience || ''}
-                onChange={(e) =>
-                  updatePrefs({ years_of_experience: parseInt(e.target.value) || 0 })
-                }
+                defaultValue={profile.preferences.years_of_experience || ''}
                 className="text-xs"
               />
             </div>

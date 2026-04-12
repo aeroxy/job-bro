@@ -1,4 +1,4 @@
-import { encode as toonEncode } from '@toon-format/toon'
+
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
 export interface ChatMessage {
@@ -311,63 +311,46 @@ function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-// --- Cache-friendly message building ---
+// --- Per-evaluator context builders ---
 
 const PROFILE_PREAMBLE = `You are an AI career evaluation agent. You will analyze job postings against a candidate's profile.`
 
-const OUTPUT_FORMAT_PROMPT = `<output_rules>
-- Follow the output format and schema specified in the system instructions exactly.
-- Do not include any preamble, explanation, or unsolicited commentary.
-- Do not wrap responses in markdown fences unless explicitly requested.
-</output_rules>`
-
-export function buildProfileContext(profile: UserProfile): string {
-  const parts: string[] = [PROFILE_PREAMBLE, '', '<candidate_profile>', '']
-
+// Resume + projects — for job-fit and growth evaluators
+export function buildResumeContext(profile: UserProfile): string {
+  const parts: string[] = [PROFILE_PREAMBLE, '']
   if (profile.resume.trim()) {
     parts.push(`<resume>\n${profile.resume.trim()}\n</resume>`, '')
   }
   if (profile.projects.trim()) {
     parts.push(`<projects>\n${profile.projects.trim()}\n</projects>`, '')
   }
-  if (profile.salary_expectation.trim()) {
-    parts.push(`<salary_expectation>\n${profile.salary_expectation.trim()}\n</salary_expectation>`, '')
-  }
-
-  const prefs = profile.preferences
-  const prefParts: string[] = []
-  prefParts.push(`<remote_preference>${prefs.remote_preference}</remote_preference>`)
-  if (prefs.preferred_locations.length > 0)
-    prefParts.push(`<preferred_locations>${toonEncode(prefs.preferred_locations)}</preferred_locations>`)
-  prefParts.push(`<company_size_preference>${prefs.company_size_preference}</company_size_preference>`)
-  if (prefs.industries_of_interest.length > 0)
-    prefParts.push(`<industries_of_interest>${toonEncode(prefs.industries_of_interest)}</industries_of_interest>`)
-  if (prefs.deal_breakers.length > 0)
-    prefParts.push(`<deal_breakers>${toonEncode(prefs.deal_breakers)}</deal_breakers>`)
-  if (prefs.years_of_experience > 0)
-    prefParts.push(`<years_of_experience>${prefs.years_of_experience}</years_of_experience>`)
-
-  parts.push(`<preferences>\n${prefParts.join('\n')}\n</preferences>`, '')
-  parts.push('</candidate_profile>')
-
-  return parts.join('\n')
+  return parts.join('\n').trimEnd()
 }
 
-// Shared cacheable prefix: [custom?, profile, output_rules, jd]
-// The JD is included here because it is identical across all evaluators for a given job,
-// extending the cached prefix further before the per-evaluator prompt breaks it.
-export function buildSharedPrefix(
-  customPrompt: string | undefined,
-  profile: UserProfile,
-  jobContent: string
-): ChatMessage[] {
-  const messages: ChatMessage[] = []
-  if (customPrompt?.trim()) {
-    messages.push({ role: 'system', content: customPrompt.trim() })
-  }
-  messages.push({ role: 'system', content: buildProfileContext(profile) })
-  messages.push({ role: 'system', content: OUTPUT_FORMAT_PROMPT })
-  messages.push({ role: 'system', content: `<jd>\n${jobContent}\n</jd>` })
-  return messages
+// Salary expectation only — for salary evaluator
+// Returns the expectation text, or a no-preference sentinel if empty
+export function buildSalaryContext(profile: UserProfile): string {
+  const expectation = profile.salary_expectation.trim()
+  if (!expectation) return 'Candidate has no salary preference.'
+  return `<salary_expectation>\n${expectation}\n</salary_expectation>`
+}
+
+// Preferences only — for preference evaluator
+export function buildPreferencesContext(profile: UserProfile): string {
+  const prefs = profile.preferences
+  const parts: string[] = []
+  const remoteLabel = prefs.remote_preference === 'no_preference' ? 'No Preference' : prefs.remote_preference
+  const sizeLabel = prefs.company_size_preference === 'no_preference' ? 'No Preference' : prefs.company_size_preference
+  parts.push(`<remote_preference>${remoteLabel}</remote_preference>`)
+  if (prefs.preferred_locations.trim())
+    parts.push(`<preferred_locations>${prefs.preferred_locations.trim()}</preferred_locations>`)
+  parts.push(`<company_size_preference>${sizeLabel}</company_size_preference>`)
+  if (prefs.industries_of_interest.trim())
+    parts.push(`<industries_of_interest>${prefs.industries_of_interest.trim()}</industries_of_interest>`)
+  if (prefs.deal_breakers.trim())
+    parts.push(`<deal_breakers>${prefs.deal_breakers.trim()}</deal_breakers>`)
+  if (prefs.years_of_experience > 0)
+    parts.push(`<years_of_experience>${prefs.years_of_experience}</years_of_experience>`)
+  return `<preferences>\n${parts.join('\n')}\n</preferences>`
 }
 

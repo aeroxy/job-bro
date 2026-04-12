@@ -17,7 +17,6 @@ import { runRiskEvaluator } from './risk'
 import { runSalaryEvaluator } from './salary'
 import { runSummaryEvaluator } from './summary'
 import { aggregate, getScore, getVerdict } from './aggregator'
-import { buildSharedPrefix } from '@/lib/llm-client'
 import { jobToMarkdown } from '@/extractor/markdown'
 
 type ProgressCallback = (evaluator: string, status: 'running' | 'completed' | 'error') => void
@@ -47,46 +46,35 @@ export async function runAllEvaluators(
   signal?: AbortSignal
 ): Promise<AggregatedReport> {
   const jobMarkdown = jobToMarkdown(job)
-  const sharedPrefix = buildSharedPrefix(customPrompt, profile, jobMarkdown)
 
-  // Phase 1: Run job_fit first to warm the prompt cache
-  const jobFit = await runWithTracking<JobFitResult>('job_fit', () =>
-    runJobFitEvaluator(sharedPrefix, config, signal)
-  , onProgress)
-
-  // Phase 2: Remaining evaluators in parallel (cache is warm)
-  const [salary, preference, risk, growth] = await Promise.all([
+  // All evaluators run in parallel — each builds its own focused context
+  const [jobFit, salary, preference, risk, growth] = await Promise.all([
+    runWithTracking<JobFitResult>('job_fit', () =>
+      runJobFitEvaluator(jobMarkdown, profile, config, customPrompt, signal)
+    , onProgress),
     runWithTracking<SalaryResult>('salary', () =>
-      runSalaryEvaluator(sharedPrefix, config, signal)
+      runSalaryEvaluator(jobMarkdown, profile, config, customPrompt, signal)
     , onProgress),
     runWithTracking<PreferenceResult>('preference', () =>
-      runPreferenceEvaluator(sharedPrefix, config, signal)
+      runPreferenceEvaluator(jobMarkdown, profile, config, customPrompt, signal)
     , onProgress),
     runWithTracking<RiskResult>('risk', () =>
-      runRiskEvaluator(sharedPrefix, config, signal)
+      runRiskEvaluator(jobMarkdown, profile, config, customPrompt, signal)
     , onProgress),
     runWithTracking<GrowthResult>('growth', () =>
-      runGrowthEvaluator(sharedPrefix, config, signal)
+      runGrowthEvaluator(jobMarkdown, profile, config, customPrompt, signal)
     , onProgress),
   ])
 
   const evaluators = { job_fit: jobFit, salary, preference, risk, growth }
 
-  // Phase 3: LLM-generated summary (falls back to concat on failure)
+  // Summary runs after — it depends on all evaluator results
   const score = getScore(evaluators)
   const verdict = getVerdict(score, evaluators)
 
-  let reasoning: string | undefined
-  let job_summary: string | undefined
-  try {
-    onProgress?.('summary', 'running')
-    const summary = await runSummaryEvaluator(sharedPrefix, config, evaluators, score, verdict, signal)
-    reasoning = summary.reasoning
-    job_summary = summary.job_summary
-    onProgress?.('summary', 'completed')
-  } catch {
-    onProgress?.('summary', 'error')
-  }
+  onProgress?.('summary', 'running')
+  const summary = await runSummaryEvaluator(jobMarkdown, evaluators, score, verdict, config, customPrompt, signal)
+  onProgress?.('summary', 'completed')
 
-  return aggregate(job, evaluators, reasoning, job_summary)
+  return aggregate(job, evaluators, summary.reasoning, summary.job_summary)
 }

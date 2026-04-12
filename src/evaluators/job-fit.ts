@@ -1,23 +1,27 @@
-import { runWithValidation, validateNumbers } from '@/lib/llm-client'
+import { runWithValidation, validateNumbers, buildResumeContext } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
 import type { JobFitResult } from '@/types/evaluation'
-import type { LLMConfig } from '@/types/profile'
+import type { LLMConfig, UserProfile } from '@/types/profile'
 
-const SYSTEM_PROMPT = `You are a technical recruiter evaluating job fit.
+const PROMPT = `You are a technical recruiter evaluating job fit.
 Compare candidate skills/experience vs job requirements.
-Output compact JSON only, no whitespace outside strings:
-{"skill_match":0.0,"experience_match":0.0,"overall_fit":0.0,"matching_skills":[],"gaps":[],"strengths":[],"summary":""}`
+Focus strictly on skills, experience, and role scope. Do not comment on salary, compensation, or location — those are evaluated separately.`
 
 export async function runJobFitEvaluator(
-  sharedPrefix: ChatMessage[],
+  jobContent: string,
+  profile: UserProfile,
   config: LLMConfig,
+  customPrompt?: string,
   signal?: AbortSignal
 ): Promise<JobFitResult> {
-  const messages: ChatMessage[] = [
-    ...sharedPrefix,
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: 'Analyze the job posting.' },
-  ]
+  const messages: ChatMessage[] = []
+  if (customPrompt?.trim()) messages.push({ role: 'system', content: customPrompt.trim() })
+  messages.push({ role: 'system', content: buildResumeContext(profile) })
+  messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
+{"skill_match":0.0,"experience_match":0.0,"overall_fit":0.0,"matching_skills":[],"gaps":[],"strengths":[],"summary":""}` })
+  messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
+  messages.push({ role: 'user', content: PROMPT })
+
   return runWithValidation<JobFitResult>(
     config,
     messages,

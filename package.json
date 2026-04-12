@@ -1,7 +1,7 @@
 {
   "name": "job-bro",
   "description": "AI-powered LinkedIn job posting analyzer Chrome extension",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.1",

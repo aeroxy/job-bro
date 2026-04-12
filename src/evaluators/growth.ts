@@ -1,23 +1,26 @@
-import { runWithValidation, validateNumbers } from '@/lib/llm-client'
+import { runWithValidation, validateNumbers, buildResumeContext } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
 import type { GrowthResult } from '@/types/evaluation'
-import type { LLMConfig } from '@/types/profile'
+import type { LLMConfig, UserProfile } from '@/types/profile'
 
-const SYSTEM_PROMPT = `You are a career strategist evaluating growth potential of a role.
-Assess: learning opportunity (new skills/tech), company brand value for resume, career trajectory.
-Output compact JSON only, no whitespace outside strings:
-{"learning_opportunity":0.0,"brand_value":0.0,"career_trajectory":0.0,"overall_growth":0.0,"highlights":[],"concerns":[],"summary":""}`
+const PROMPT = `You are a career strategist evaluating growth potential of a role.
+Assess: learning opportunity (new skills/tech), company brand value for resume, career trajectory.`
 
 export async function runGrowthEvaluator(
-  sharedPrefix: ChatMessage[],
+  jobContent: string,
+  profile: UserProfile,
   config: LLMConfig,
+  customPrompt?: string,
   signal?: AbortSignal
 ): Promise<GrowthResult> {
-  const messages: ChatMessage[] = [
-    ...sharedPrefix,
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: 'Analyze the job posting.' },
-  ]
+  const messages: ChatMessage[] = []
+  if (customPrompt?.trim()) messages.push({ role: 'system', content: customPrompt.trim() })
+  messages.push({ role: 'system', content: buildResumeContext(profile) })
+  messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
+{"learning_opportunity":0.0,"brand_value":0.0,"career_trajectory":0.0,"overall_growth":0.0,"highlights":[],"concerns":[],"summary":""}` })
+  messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
+  messages.push({ role: 'user', content: PROMPT })
+
   return runWithValidation<GrowthResult>(
     config,
     messages,

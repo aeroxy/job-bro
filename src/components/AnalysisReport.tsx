@@ -7,6 +7,7 @@ import {
   Target,
   TrendingUp,
 } from 'lucide-react'
+import { marked } from 'marked'
 
 import type { AggregatedReport } from '@/types/evaluation'
 import type { EvaluatorProgress } from '@/hooks/useTabSessions'
@@ -231,27 +232,16 @@ function SalaryDetail({ result }: { result: import('@/types/evaluation').SalaryR
 }
 
 function PreferenceDetail({ result }: { result: import('@/types/evaluation').PreferenceResult }) {
-  const conflicts = arr(result.conflicts)
+  const summaryHtml = result.summary
+    ? marked.parse(result.summary, { async: false }) as string
+    : ''
   return (
     <div className="space-y-1.5 pt-1">
       <ScoreBar label="Alignment" value={result.alignment_score} />
-      {conflicts.length > 0 && (
-        <div className="space-y-1">
-          {conflicts.map((c, i) => (
-            <div key={i} className="text-xs flex items-start gap-1.5">
-              <span
-                className={`mt-0.5 inline-block size-1.5 rounded-full shrink-0 ${
-                  c.severity === 'high' ? 'bg-red-500' : c.severity === 'medium' ? 'bg-yellow-500' : 'bg-muted-foreground'
-                }`}
-              />
-              <span className="text-muted-foreground">
-                <strong>{str(c.category)}:</strong> wanted "{str(c.expected)}", got "{str(c.actual)}"
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      <p className="text-xs text-muted-foreground">{str(result.summary)}</p>
+      {summaryHtml
+        ? <div className="pref-summary text-xs text-muted-foreground" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
+        : <p className="text-xs text-muted-foreground">{str(result.summary)}</p>
+      }
     </div>
   )
 }
