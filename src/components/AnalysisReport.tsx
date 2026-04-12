@@ -26,10 +26,21 @@ export function AnalysisReport({ report, progress, analyzing }: AnalysisReportPr
   return (
     <div className="space-y-3">
       {/* Verdict */}
-      {report && (
+      {report ? (
         <div className="border rounded-lg p-3 space-y-2">
           <VerdictBadge verdict={report.verdict} score={report.overall_score} />
+          {report.job_summary && (
+            <p className="text-xs leading-relaxed">{report.job_summary}</p>
+          )}
           <p className="text-xs text-muted-foreground leading-relaxed">{report.reasoning}</p>
+        </div>
+      ) : progress.summary === 'running' && (
+        <div className="border rounded-lg p-3 space-y-2 animate-pulse">
+          <div className="h-5 w-24 rounded bg-muted" />
+          <div className="space-y-1.5">
+            <div className="h-3 rounded bg-muted" />
+            <div className="h-3 w-4/5 rounded bg-muted" />
+          </div>
         </div>
       )}
 

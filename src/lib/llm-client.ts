@@ -1,3 +1,4 @@
+import { encode as toonEncode } from '@toon-format/toon'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
 export interface ChatMessage {
@@ -337,12 +338,12 @@ export function buildProfileContext(profile: UserProfile): string {
   const prefParts: string[] = []
   prefParts.push(`<remote_preference>${prefs.remote_preference}</remote_preference>`)
   if (prefs.preferred_locations.length > 0)
-    prefParts.push(`<preferred_locations>${JSON.stringify(prefs.preferred_locations)}</preferred_locations>`)
+    prefParts.push(`<preferred_locations>${toonEncode(prefs.preferred_locations)}</preferred_locations>`)
   prefParts.push(`<company_size_preference>${prefs.company_size_preference}</company_size_preference>`)
   if (prefs.industries_of_interest.length > 0)
-    prefParts.push(`<industries_of_interest>${JSON.stringify(prefs.industries_of_interest)}</industries_of_interest>`)
+    prefParts.push(`<industries_of_interest>${toonEncode(prefs.industries_of_interest)}</industries_of_interest>`)
   if (prefs.deal_breakers.length > 0)
-    prefParts.push(`<deal_breakers>${JSON.stringify(prefs.deal_breakers)}</deal_breakers>`)
+    prefParts.push(`<deal_breakers>${toonEncode(prefs.deal_breakers)}</deal_breakers>`)
   if (prefs.years_of_experience > 0)
     prefParts.push(`<years_of_experience>${prefs.years_of_experience}</years_of_experience>`)
 

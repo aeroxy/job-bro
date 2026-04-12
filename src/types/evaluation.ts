@@ -77,6 +77,7 @@ export interface AggregatedReport {
   evaluated_at: number
   verdict: Verdict
   overall_score: number
+  job_summary?: string
   reasoning: string
   key_risks: string[]
   negotiation_tips: string[]

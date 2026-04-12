@@ -173,7 +173,8 @@ function collectNegotiationTips(evaluators: EvaluatorResults): string[] {
 export function aggregate(
   job: ExtractedJob,
   evaluators: EvaluatorResults,
-  reasoningOverride?: string
+  reasoningOverride?: string,
+  job_summary?: string
 ): AggregatedReport {
   const overall_score = getScore(evaluators)
   const verdict = getVerdict(overall_score, evaluators)
@@ -186,6 +187,7 @@ export function aggregate(
     evaluated_at: Date.now(),
     verdict,
     overall_score,
+    job_summary,
     reasoning,
     key_risks,
     negotiation_tips,

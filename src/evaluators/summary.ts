@@ -1,3 +1,4 @@
+import { encode as toonEncode } from '@toon-format/toon'
 import { chatCompletion } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
 import type { Verdict } from '@/types/evaluation'
@@ -9,19 +10,24 @@ You are a career advisor synthesizing multiple evaluation analyses of a job post
 </role>
 
 <task>
-Given the evaluation results in the user message, write a concise 2-4 sentence summary explaining
-why this role received its score and verdict.
+- Write a "job_summary": 1-2 sentences describing what the job is (role, company type, domain) so the candidate instantly knows what they're looking at.
+- Write a "reasoning": 2-4 sentences explaining why this role received its score and verdict, focusing on the most important fit signals, any deal-breakers, salary alignment, and growth potential.
 </task>
 
 <rules>
-- Focus on: the most important fit signals, any deal-breakers, salary alignment, and growth potential.
 - Be direct and actionable — tell the candidate what matters most.
-- Do not repeat the score or verdict — they are already displayed separately.
+- Do not repeat the score or verdict in "reasoning" — they are already displayed separately.
 </rules>
 
 <output_format>
-IMPORTANT: Output plain prose only — 2 to 4 sentences. No JSON, no markdown, no bullet points, no headers, no code fences. Your entire response must be plain text.
+Output compact JSON only, no whitespace outside strings:
+{"job_summary":"","reasoning":""}
 </output_format>`
+
+export interface SummaryResult {
+  job_summary: string
+  reasoning: string
+}
 
 export async function runSummaryEvaluator(
   sharedPrefix: ChatMessage[],
@@ -30,11 +36,11 @@ export async function runSummaryEvaluator(
   score: number,
   verdict: Verdict,
   signal?: AbortSignal
-): Promise<string> {
+): Promise<SummaryResult> {
   const userContent = `Score: ${score}/100 | Verdict: ${verdict}
 
 <evaluation_results>
-${JSON.stringify(evaluatorResults, null, 2)}
+${toonEncode(evaluatorResults)}
 </evaluation_results>`
 
   const messages: ChatMessage[] = [
@@ -43,10 +49,12 @@ ${JSON.stringify(evaluatorResults, null, 2)}
     { role: 'user', content: userContent },
   ]
 
-  return await chatCompletion(config, messages, {
-    json_mode: false,
+  const raw = await chatCompletion(config, messages, {
+    json_mode: true,
     max_tokens: 500,
     temperature: 0.3,
     signal,
   })
+
+  return JSON.parse(raw) as SummaryResult
 }

@@ -77,13 +77,16 @@ export async function runAllEvaluators(
   const verdict = getVerdict(score, evaluators)
 
   let reasoning: string | undefined
+  let job_summary: string | undefined
   try {
     onProgress?.('summary', 'running')
-    reasoning = await runSummaryEvaluator(sharedPrefix, config, evaluators, score, verdict, signal)
+    const summary = await runSummaryEvaluator(sharedPrefix, config, evaluators, score, verdict, signal)
+    reasoning = summary.reasoning
+    job_summary = summary.job_summary
     onProgress?.('summary', 'completed')
   } catch {
     onProgress?.('summary', 'error')
   }
 
-  return aggregate(job, evaluators, reasoning)
+  return aggregate(job, evaluators, reasoning, job_summary)
 }
