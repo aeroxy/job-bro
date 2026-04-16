@@ -154,3 +154,43 @@
   font-weight: 600;
   color: var(--foreground);
 }
+
+.chat-response p {
+  margin: 0.2em 0;
+  line-height: 1.5;
+}
+.chat-response ul,
+.chat-response ol {
+  margin: 0.2em 0;
+  padding-left: 1.2em;
+}
+.chat-response li {
+  margin: 0.1em 0;
+}
+.chat-response strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.chat-response code {
+  font-size: 0.9em;
+  background: var(--muted);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+.chat-response table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 0.3em 0;
+}
+.chat-response th,
+.chat-response td {
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.chat-response th {
+  background: var(--muted);
+  font-weight: 600;
+}

@@ -1,7 +1,10 @@
 import { runResumeGenerator } from '@/evaluators/resume'
 import { runAllEvaluators } from '@/evaluators/runner'
+import { chatCompletion } from '@/lib/llm-client'
+import type { ChatMessage as LLMChatMessage } from '@/lib/llm-client'
 import { getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
-import type { ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
+import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
+import type { UserProfile } from '@/types/profile'
 
 const analysisControllers = new Map<number, AbortController>()
 
@@ -62,6 +65,17 @@ export default defineBackground(() => {
           message.payload.comment
         ).then(sendResponse).catch((e) => {
           sendResponse({ type: 'RESUME_ERROR', error: (e as Error).message })
+        })
+        return true
+
+      case 'CHAT_REQUEST':
+        handleChatMessage(
+          message.payload.question,
+          message.payload.history,
+          message.payload.jobMarkdown,
+          message.payload.analysisContext
+        ).then(sendResponse).catch((e) => {
+          sendResponse({ type: 'CHAT_ERROR', error: (e as Error).message })
         })
         return true
 
@@ -160,6 +174,84 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
   } catch (e) {
     return { type: 'ANALYSIS_ERROR', error: (e as Error).message }
   }
+}
+
+async function handleChatMessage(
+  question: string,
+  history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  jobMarkdown: string,
+  analysisContext: string
+): Promise<ChatResponse> {
+  const profile = await getProfile()
+  if (!profile) {
+    return { type: 'CHAT_ERROR', error: 'No profile configured. Set up your profile first.' }
+  }
+
+  const config = await getLLMConfig()
+  if (!config || !config.base_url || !config.model) {
+    return { type: 'CHAT_ERROR', error: 'No LLM configured. Set up base URL and model in Settings.' }
+  }
+
+  const customPrompt = await getCustomPrompt()
+
+  const messages: LLMChatMessage[] = []
+
+  if (customPrompt?.trim()) {
+    messages.push({ role: 'system', content: customPrompt.trim() })
+  }
+
+  messages.push({ role: 'system', content: buildChatSystemPrompt(profile, jobMarkdown, analysisContext) })
+
+  for (const turn of history) {
+    messages.push({ role: turn.role, content: turn.content })
+  }
+
+  messages.push({ role: 'user', content: question })
+
+  try {
+    const answer = await chatCompletion(config, messages, {
+      json_mode: false,
+      max_tokens: 1500,
+      temperature: 0.4,
+    })
+    return { type: 'CHAT_RESPONSE', payload: { answer } }
+  } catch (e) {
+    return { type: 'CHAT_ERROR', error: (e as Error).message }
+  }
+}
+
+function buildChatSystemPrompt(profile: UserProfile, jobMarkdown: string, analysisContext: string): string {
+  const parts: string[] = [
+    `You are an AI career advisor helping a candidate evaluate a job opportunity. You have already analyzed this job posting and produced a detailed report. The candidate is asking follow-up questions.
+
+Answer concisely and directly. Use markdown formatting when helpful (lists, bold, etc). Draw on all available context: the job description, the candidate's profile, and the completed analysis. Avoid markdown tables — the display area is narrow; use bullet lists or plain sentences instead.`,
+    '',
+    `<job_description>\n${jobMarkdown}\n</job_description>`,
+    '',
+    `<candidate_resume>\n${profile.resume.trim()}\n</candidate_resume>`,
+  ]
+
+  if (profile.projects.trim()) {
+    parts.push('', `<candidate_projects>\n${profile.projects.trim()}\n</candidate_projects>`)
+  }
+
+  const prefs = profile.preferences
+  const remoteLabel = prefs.remote_preference === 'no_preference' ? 'No Preference' : prefs.remote_preference
+  const sizeLabel = prefs.company_size_preference === 'no_preference' ? 'No Preference' : prefs.company_size_preference
+
+  parts.push('', `<candidate_preferences>
+Salary expectation: ${profile.salary_expectation.trim() || 'Not specified'}
+Remote preference: ${remoteLabel}
+Location preference: ${prefs.preferred_locations.trim() || 'Not specified'}
+Company size: ${sizeLabel}
+Industries: ${prefs.industries_of_interest.trim() || 'Not specified'}
+Deal breakers: ${prefs.deal_breakers.trim() || 'None specified'}
+Years of experience: ${prefs.years_of_experience}
+</candidate_preferences>`)
+
+  parts.push('', `<analysis_report>\n${analysisContext}\n</analysis_report>`)
+
+  return parts.join('\n')
 }
 
 async function handleGenerateResume(

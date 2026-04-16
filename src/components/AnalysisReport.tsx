@@ -8,10 +8,15 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { marked } from 'marked'
+import { useMemo } from 'react'
 
 import type { AggregatedReport } from '@/types/evaluation'
+import type { ExtractedJob } from '@/types/job'
 import type { EvaluatorProgress } from '@/hooks/useTabSessions'
+import { formatAnalysisContext } from '@/lib/analysis-context'
+import { jobToMarkdown } from '@/extractor/markdown'
 import { EvaluatorCard } from './EvaluatorCard'
+import { ReportChat } from './ReportChat'
 import { ScoreBar } from './ScoreBar'
 import { VerdictBadge } from './VerdictBadge'
 
@@ -19,9 +24,13 @@ interface AnalysisReportProps {
   report: AggregatedReport | null
   progress: EvaluatorProgress
   analyzing: boolean
+  job?: ExtractedJob | null
 }
 
-export function AnalysisReport({ report, progress, analyzing }: AnalysisReportProps) {
+export function AnalysisReport({ report, progress, analyzing, job }: AnalysisReportProps) {
+  const jobMarkdown = useMemo(() => (job ? jobToMarkdown(job) : ''), [job])
+  const analysisContext = useMemo(() => (report ? formatAnalysisContext(report) : ''), [report])
+
   if (!report && !analyzing) return null
 
   return (
@@ -137,6 +146,11 @@ export function AnalysisReport({ report, progress, analyzing }: AnalysisReportPr
             ))}
           </ul>
         </div>
+      )}
+
+      {/* Chat */}
+      {report && job && (
+        <ReportChat jobMarkdown={jobMarkdown} analysisContext={analysisContext} />
       )}
     </div>
   )

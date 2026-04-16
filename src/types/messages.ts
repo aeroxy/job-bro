@@ -85,6 +85,31 @@ export type CancelAnalysisMessage = {
   tabId: number
 }
 
+// Sidebar -> Background: ask a follow-up question about the analysis
+export type ChatRequestMessage = {
+  type: 'CHAT_REQUEST'
+  payload: {
+    question: string
+    history: Array<{ role: 'user' | 'assistant'; content: string }>
+    jobMarkdown: string
+    analysisContext: string
+  }
+}
+
+// Background -> Sidebar: chat answer
+export type ChatResponseMessage = {
+  type: 'CHAT_RESPONSE'
+  payload: { answer: string }
+}
+
+// Background -> Sidebar: chat error
+export type ChatErrorMessage = {
+  type: 'CHAT_ERROR'
+  error: string
+}
+
+export type ChatResponse = ChatResponseMessage | ChatErrorMessage
+
 export type Message =
   | RequestExtractionMessage
   | ExtractJDMessage
@@ -98,3 +123,6 @@ export type Message =
   | GenerateResumeMessage
   | ResumeResultMessage
   | ResumeErrorMessage
+  | ChatRequestMessage
+  | ChatResponseMessage
+  | ChatErrorMessage

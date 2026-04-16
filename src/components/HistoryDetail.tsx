@@ -77,7 +77,7 @@ export function HistoryDetail({ analysisId, onBack }: HistoryDetailProps) {
       </header>
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         <JobSummaryCard job={record.job} />
-        <AnalysisReport report={record.report} progress={progress} analyzing={false} />
+        <AnalysisReport report={record.report} progress={progress} analyzing={false} job={record.job} />
       </div>
     </div>
   )
