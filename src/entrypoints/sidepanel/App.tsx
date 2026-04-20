@@ -53,6 +53,9 @@ export default function App() {
     analyze,
     stop,
     reset,
+    qnaHistory,
+    appendChatTurns,
+    deleteChatTurn,
     resumeStatus,
     resumeMarkdown,
     resumeError,
@@ -86,8 +89,9 @@ export default function App() {
   const handleGenerateResume = useCallback(async () => {
     if (!job) return
     setTabView({ name: 'resume' })
+    if (resumeMarkdown) return // already have one — just view it
     generateResume(job, report ? formatAnalysisContext(report) : undefined)
-  }, [job, report, generateResume, setTabView])
+  }, [job, report, resumeMarkdown, generateResume, setTabView])
 
   // --- View routing ---
 
@@ -141,10 +145,7 @@ export default function App() {
         error={resumeError}
         onMarkdownChange={setResumeMarkdown}
         onRegenerate={(comment) => job && regenerateResume(job, comment)}
-        onBack={() => {
-          resetResume()
-          setTabView({ name: 'main' })
-        }}
+        onBack={() => setTabView({ name: 'main' })}
       />
     )
   }
@@ -297,7 +298,7 @@ export default function App() {
                   size="sm"
                 >
                   <FileText className="size-3" />
-                  Generate Resume
+                  {resumeMarkdown ? 'View Resume' : 'Generate Resume'}
                 </Button>
               )}
             </>
@@ -320,6 +321,9 @@ export default function App() {
           progress={progress}
           analyzing={status === 'analyzing'}
           job={job}
+          qnaHistory={qnaHistory}
+          onAppendChat={appendChatTurns}
+          onDeleteChatTurn={deleteChatTurn}
         />
 
         {/* Empty state */}

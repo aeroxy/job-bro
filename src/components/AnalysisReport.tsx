@@ -12,6 +12,7 @@ import { useMemo } from 'react'
 
 import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
+import type { ChatTurn } from '@/types/chat'
 import type { EvaluatorProgress } from '@/hooks/useTabSessions'
 import { formatAnalysisContext } from '@/lib/analysis-context'
 import { jobToMarkdown } from '@/extractor/markdown'
@@ -25,9 +26,12 @@ interface AnalysisReportProps {
   progress: EvaluatorProgress
   analyzing: boolean
   job?: ExtractedJob | null
+  qnaHistory: ChatTurn[]
+  onAppendChat: (turns: ChatTurn[]) => void
+  onDeleteChatTurn: (index: number) => void
 }
 
-export function AnalysisReport({ report, progress, analyzing, job }: AnalysisReportProps) {
+export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, onAppendChat, onDeleteChatTurn }: AnalysisReportProps) {
   const jobMarkdown = useMemo(() => (job ? jobToMarkdown(job) : ''), [job])
   const analysisContext = useMemo(() => (report ? formatAnalysisContext(report) : ''), [report])
 
@@ -150,7 +154,13 @@ export function AnalysisReport({ report, progress, analyzing, job }: AnalysisRep
 
       {/* Chat */}
       {report && job && (
-        <ReportChat jobMarkdown={jobMarkdown} analysisContext={analysisContext} />
+        <ReportChat
+          jobMarkdown={jobMarkdown}
+          analysisContext={analysisContext}
+          history={qnaHistory}
+          onAppend={onAppendChat}
+          onDeleteTurn={onDeleteChatTurn}
+        />
       )}
     </div>
   )

@@ -1,5 +1,6 @@
 import type { AggregatedReport } from './evaluation'
 import type { ExtractedJob } from './job'
+import type { ChatTurn } from './chat'
 
 // Sidebar -> Background: request JD extraction from a specific tab
 export type RequestExtractionMessage = {
@@ -62,6 +63,7 @@ export type GenerateResumeMessage = {
     previousResume?: string
     previousSummary?: string
     comment?: string
+    qnaHistory?: ChatTurn[]
   }
 }
 

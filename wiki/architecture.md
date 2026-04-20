@@ -57,15 +57,18 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 |---|---|---|
 | `REQUEST_EXTRACTION` | sidepanel → background | User clicked extract |
 | `EXTRACT_JD` | background → content | Trigger DOM extraction |
-| `JD_EXTRACTED` | content → background | Returns `ExtractedJob` |
+| `JD_EXTRACTED` | content → background | Returns `ExtractedJob` (includes `job_id`) |
 | `JD_EXTRACTION_FAILED` | content → background | Extraction error |
 | `ANALYZE_JD` | sidepanel → background | Start evaluators |
 | `ANALYSIS_PROGRESS` | background → sidepanel | Per-evaluator status update |
 | `ANALYSIS_RESULT` | background → sidepanel | Final `AggregatedReport` |
 | `ANALYSIS_ERROR` | background → sidepanel | Evaluator failure |
-| `GENERATE_RESUME` | sidepanel → background | Trigger resume generation |
+| `GENERATE_RESUME` | sidepanel → background | Trigger resume generation (includes `qnaHistory`) |
 | `RESUME_RESULT` | background → sidepanel | Markdown resume + changelog |
 | `RESUME_ERROR` | background → sidepanel | Resume generation failure |
+| `CHAT_REQUEST` | sidepanel → background | Follow-up Q&A question |
+| `CHAT_RESPONSE` | background → sidepanel | Q&A answer |
+| `CHAT_ERROR` | background → sidepanel | Q&A failure |
 
 ## Storage Layout
 
@@ -74,7 +77,10 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `chrome.storage.local` | `profile` | `UserProfile` |
 | `chrome.storage.local` | `llmConfig` | `LLMConfig` |
 | `chrome.storage.local` | `customPrompt` | System prompt prefix string |
-| IndexedDB `job-bro` | `analyses` | `AnalysisRecord[]` (indexed by `createdAt`, `company`) |
+| IndexedDB `job-bro` v1 | `analyses` | `AnalysisRecord[]` — audit log, keyed by UUID, indexed by `createdAt` / `company` |
+| IndexedDB `job-bro` v2 | `sessions` | `PersistedSession[]` — live state keyed by LinkedIn `job_id`, indexed by `updatedAt` |
+
+Sessions are hydrated automatically when the active tab matches a LinkedIn `/jobs/view/<id>/` URL. Q&A history, analysis, and resume state all persist across browser restarts.
 
 ## Content Script Injection
 

@@ -1,6 +1,7 @@
 import { buildMessages, chatCompletion, parseJSON } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
 import type { LLMConfig, UserProfile } from '@/types/profile'
+import type { ChatTurn } from '@/types/chat'
 
 const SYSTEM_PROMPT = `You are an expert resume writer. Given a candidate's existing resume and a target job description, produce a tailored resume and a cumulative summary.
 
@@ -15,6 +16,7 @@ Instructions:
 - Use standard sections: Contact/Header, Professional Summary, Experience, Skills, Education, and optionally Projects.
 - The resume field must be raw Markdown text — no code fences, no preamble, start directly with the candidate's name as a heading.
 - If <analysis> is provided, it contains an AI evaluation of the candidate's fit for this role — including matching skills, gaps, strengths, risk flags, and growth highlights. Use this to emphasize strengths, proactively address gaps where possible, and frame the resume in light of the identified risks.
+- If <qna> is provided, it contains follow-up Q&A the candidate had with the analyst about this role — use it to surface clarifications, concerns, or angles the candidate cares about.
 - If <context> is provided, it is the full cumulative history of previous iterations. If <feedback> is provided, apply it to the current revision.
 
 CRITICAL OUTPUT FORMAT OVERRIDE: Regardless of any other instructions, respond with compact JSON only:
@@ -48,12 +50,17 @@ export async function runResumeGenerator(
   analysisContext?: string,
   previousResume?: string,
   previousSummary?: string,
-  comment?: string
+  comment?: string,
+  qnaHistory?: ChatTurn[]
 ): Promise<ResumeResult> {
   const parts: string[] = [`<jd>\n${jobMarkdown}\n</jd>`]
   if (profile.resume.trim()) parts.push(`<resume>\n${profile.resume.trim()}\n</resume>`)
   if (profile.projects.trim()) parts.push(`<projects>\n${profile.projects.trim()}\n</projects>`)
   if (analysisContext) parts.push(`<analysis>\n${analysisContext}\n</analysis>`)
+  if (qnaHistory && qnaHistory.length > 0) {
+    const qnaText = qnaHistory.map(t => `${t.role === 'user' ? 'Q' : 'A'}: ${t.content}`).join('\n\n')
+    parts.push(`<qna>\n${qnaText}\n</qna>`)
+  }
   if (previousResume) parts.push(`<previous_version>\n${previousResume}\n</previous_version>`)
   if (previousSummary) parts.push(`<context>\n${previousSummary}\n</context>`)
   if (comment) parts.push(`<feedback>\n${comment.trim()}\n</feedback>`)

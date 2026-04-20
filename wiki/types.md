@@ -10,6 +10,7 @@ Parsed output of the LinkedIn content script.
 
 ```ts
 interface ExtractedJob {
+  job_id?: string                   // LinkedIn numeric ID (e.g. "4402641526"), set when URL matches /jobs/view/<id>/
   url: string
   title: string
   company: string
@@ -139,14 +140,41 @@ type EvaluatorStatus<T> =
 
 ## `AnalysisRecord` (`db.ts`)
 
-Persisted to IndexedDB.
+Persisted to IndexedDB `analyses` store (audit log, keyed by random UUID).
 
 ```ts
 interface AnalysisRecord {
-  id: string         // auto-generated
+  id: string         // auto-generated UUID
   job: ExtractedJob
   report: AggregatedReport
   createdAt: number  // Unix timestamp
+}
+```
+
+## `PersistedSession` (`db.ts`)
+
+Persisted to IndexedDB `sessions` store, keyed by LinkedIn job ID. This is the live cache that powers cross-visit state restore.
+
+```ts
+interface PersistedSession {
+  job_id: string             // primary key — LinkedIn numeric ID
+  job: ExtractedJob
+  report: AggregatedReport | null
+  qnaHistory: ChatTurn[]     // follow-up Q&A chat history
+  resumeMarkdown: string | null
+  resumeSummary: string | null
+  updatedAt: number          // Unix timestamp
+}
+```
+
+## `ChatTurn` (`chat.ts`)
+
+Single turn in the follow-up Q&A conversation.
+
+```ts
+interface ChatTurn {
+  role: 'user' | 'assistant'
+  content: string
 }
 ```
 

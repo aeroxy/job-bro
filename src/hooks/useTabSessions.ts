@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
+import type { ChatTurn } from '@/types/chat'
 import type { AnalysisProgressMessage } from '@/types/messages'
+import { getSessionByJobId, saveSession } from '@/lib/db'
+import { extractLinkedInJobId } from '@/extractor/linkedin'
 
 export type AnalysisStatus = 'idle' | 'extracting' | 'analyzing' | 'done' | 'error'
 export type ResumeStatus = 'idle' | 'generating' | 'done' | 'error'
@@ -40,6 +43,9 @@ interface TabSession {
   resumeMarkdown: string | null
   resumeSummary: string | null
   resumeError: string | null
+  qnaHistory: ChatTurn[]
+  // Track which job_id this session was hydrated from to avoid re-hydrating
+  hydratedJobId: string | null
 }
 
 const DEFAULT_SESSION: TabSession = {
@@ -53,6 +59,8 @@ const DEFAULT_SESSION: TabSession = {
   resumeMarkdown: null,
   resumeSummary: null,
   resumeError: null,
+  qnaHistory: [],
+  hydratedJobId: null,
 }
 
 export function useTabSessions(
@@ -74,8 +82,6 @@ export function useTabSessions(
   const updateSession = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
     sessionsRef.current.set(tabId, { ...session, ...patch })
-    // Only trigger re-render if updating the active tab
-    // We read activeTabId via closure - but since it changes, we need a ref
   }, [])
 
   // Keep a ref to activeTabId so we can check it in callbacks
@@ -91,10 +97,80 @@ export function useTabSessions(
     }
   }, [rerender])
 
+  // Persist session to IndexedDB if it has a job_id
+  const persistSession = useCallback(async (tabId: number) => {
+    const s = sessionsRef.current.get(tabId)
+    if (!s?.job?.job_id) return
+    await saveSession({
+      job_id: s.job.job_id,
+      job: s.job,
+      report: s.report,
+      qnaHistory: s.qnaHistory,
+      resumeMarkdown: s.resumeMarkdown,
+      resumeSummary: s.resumeSummary,
+      updatedAt: Date.now(),
+    })
+  }, [])
+
+  // Hydrate session from IndexedDB when a tab becomes active
+  const hydrateTab = useCallback(async (tabId: number) => {
+    let tabUrl: string | undefined
+    try {
+      const tab = await chrome.tabs.get(tabId)
+      tabUrl = tab.url
+    } catch {
+      return
+    }
+    if (!tabUrl) return
+
+    const jobId = extractLinkedInJobId(tabUrl)
+    if (!jobId) return
+
+    const existing = sessionsRef.current.get(tabId)
+    // Skip if already hydrated from same job
+    if (existing?.hydratedJobId === jobId) return
+
+    const persisted = await getSessionByJobId(jobId)
+    if (!persisted) {
+      // Mark that we checked so we don't re-query on every render
+      updateSessionAndRender(tabId, { hydratedJobId: jobId })
+      return
+    }
+
+    updateSessionAndRender(tabId, {
+      hydratedJobId: jobId,
+      job: persisted.job,
+      report: persisted.report,
+      qnaHistory: persisted.qnaHistory,
+      resumeMarkdown: persisted.resumeMarkdown,
+      resumeSummary: persisted.resumeSummary,
+      resumeStatus: persisted.resumeMarkdown ? 'done' : 'idle',
+      status: persisted.report ? 'done' : 'idle',
+    })
+  }, [updateSessionAndRender])
+
   // Re-render when active tab switches (to show that tab's session)
   useEffect(() => {
     rerender()
-  }, [activeTabId, rerender])
+    if (activeTabId) {
+      hydrateTab(activeTabId)
+    }
+  }, [activeTabId, rerender, hydrateTab])
+
+  // Listen for URL changes in active tab (user navigates between job postings)
+  useEffect(() => {
+    const handleUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (tabId !== activeTabIdRef.current) return
+      if (!changeInfo.url) return
+      const session = sessionsRef.current.get(tabId)
+      const newJobId = extractLinkedInJobId(changeInfo.url)
+      if (newJobId && newJobId !== session?.hydratedJobId) {
+        hydrateTab(tabId)
+      }
+    }
+    chrome.tabs.onUpdated.addListener(handleUpdated)
+    return () => chrome.tabs.onUpdated.removeListener(handleUpdated)
+  }, [hydrateTab])
 
   // Clean up sessions when tabs are closed
   useEffect(() => {
@@ -174,6 +250,7 @@ export function useTabSessions(
 
       if (response.type === 'ANALYSIS_RESULT') {
         updateSessionAndRender(tabId, { report: response.payload, status: 'done' })
+        await persistSession(tabId)
         return response.payload as AggregatedReport
       } else {
         updateSessionAndRender(tabId, { error: response.error || 'Analysis failed', status: 'error' })
@@ -184,7 +261,7 @@ export function useTabSessions(
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
       return null
     }
-  }, [updateSessionAndRender])
+  }, [updateSessionAndRender, persistSession])
 
   const stop = useCallback(() => {
     const tabId = activeTabIdRef.current
@@ -210,13 +287,35 @@ export function useTabSessions(
       report: null,
       error: null,
       progress: { ...INITIAL_PROGRESS },
+      qnaHistory: [],
+      hydratedJobId: null,
     })
   }, [updateSessionAndRender])
+
+  const deleteChatTurn = useCallback(async (index: number) => {
+    const tabId = activeTabIdRef.current
+    if (!tabId) return
+    const session = getSession(tabId)
+    const newHistory = session.qnaHistory.filter((_, i) => i !== index)
+    updateSessionAndRender(tabId, { qnaHistory: newHistory })
+    await persistSession(tabId)
+  }, [getSession, updateSessionAndRender, persistSession])
+
+  const appendChatTurns = useCallback(async (turns: ChatTurn[]) => {
+    const tabId = activeTabIdRef.current
+    if (!tabId) return
+    const session = getSession(tabId)
+    const newHistory = [...session.qnaHistory, ...turns]
+    updateSessionAndRender(tabId, { qnaHistory: newHistory })
+    await persistSession(tabId)
+  }, [getSession, updateSessionAndRender, persistSession])
 
   // Resume generation
   const generateResume = useCallback(async (job: ExtractedJob, analysisContext?: string) => {
     const tabId = activeTabIdRef.current
     if (!tabId) return
+
+    const session = getSession(tabId)
 
     updateSessionAndRender(tabId, {
       resumeStatus: 'generating',
@@ -228,7 +327,7 @@ export function useTabSessions(
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'GENERATE_RESUME',
-        payload: { job, analysisContext },
+        payload: { job, analysisContext, qnaHistory: session.qnaHistory },
       })
 
       if (response.type === 'RESUME_RESULT') {
@@ -237,6 +336,7 @@ export function useTabSessions(
           resumeSummary: response.payload.summary,
           resumeStatus: 'done',
         })
+        await persistSession(tabId)
       } else {
         updateSessionAndRender(tabId, {
           resumeError: response.error || 'Resume generation failed',
@@ -249,7 +349,7 @@ export function useTabSessions(
         resumeStatus: 'error',
       })
     }
-  }, [updateSessionAndRender])
+  }, [updateSessionAndRender, getSession, persistSession])
 
   const regenerateResume = useCallback(async (job: ExtractedJob, comment: string) => {
     const tabId = activeTabIdRef.current
@@ -270,6 +370,7 @@ export function useTabSessions(
           previousResume: session.resumeMarkdown ?? undefined,
           previousSummary: session.resumeSummary ?? undefined,
           comment: comment.trim() || undefined,
+          qnaHistory: session.qnaHistory,
         },
       })
 
@@ -279,6 +380,7 @@ export function useTabSessions(
           resumeSummary: response.payload.summary,
           resumeStatus: 'done',
         })
+        await persistSession(tabId)
       } else {
         updateSessionAndRender(tabId, {
           resumeError: response.error || 'Resume generation failed',
@@ -291,7 +393,7 @@ export function useTabSessions(
         resumeStatus: 'error',
       })
     }
-  }, [updateSessionAndRender, getSession])
+  }, [updateSessionAndRender, getSession, persistSession])
 
   const setResumeMarkdown = useCallback((markdown: string | null) => {
     const tabId = activeTabIdRef.current
@@ -333,6 +435,10 @@ export function useTabSessions(
     analyze,
     stop,
     reset,
+    // Q&A
+    qnaHistory: current.qnaHistory,
+    appendChatTurns,
+    deleteChatTurn,
     // Resume
     resumeStatus: current.resumeStatus,
     resumeMarkdown: current.resumeMarkdown,

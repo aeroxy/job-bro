@@ -1,26 +1,26 @@
-import { MessageCircle, Send } from 'lucide-react'
+import { MessageCircle, Send, Trash2 } from 'lucide-react'
 import { marked } from 'marked'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-
-interface ChatTurn {
-  role: 'user' | 'assistant'
-  content: string
-}
+import type { ChatTurn } from '@/types/chat'
 
 interface ReportChatProps {
   jobMarkdown: string
   analysisContext: string
+  history: ChatTurn[]
+  onAppend: (turns: ChatTurn[]) => void
+  onDeleteTurn: (index: number) => void
 }
 
-export function ReportChat({ jobMarkdown, analysisContext }: ReportChatProps) {
-  const [history, setHistory] = useState<ChatTurn[]>([])
+export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, onDeleteTurn }: ReportChatProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
+  const prevLengthRef = useRef(history.length)
 
   useEffect(() => {
     mountedRef.current = true
@@ -28,9 +28,10 @@ export function ReportChat({ jobMarkdown, analysisContext }: ReportChatProps) {
   }, [])
 
   useEffect(() => {
-    if (history.length > 0) {
+    if (history.length > prevLengthRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
+    prevLengthRef.current = history.length
   }, [history.length])
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -39,9 +40,10 @@ export function ReportChat({ jobMarkdown, analysisContext }: ReportChatProps) {
     const question = (new FormData(form).get('question') as string).trim()
     if (!question || loading) return
     form.reset()
+    setPendingDelete(null)
 
-    const newHistory: ChatTurn[] = [...history, { role: 'user', content: question }]
-    setHistory(newHistory)
+    const userTurn: ChatTurn = { role: 'user', content: question }
+    onAppend([userTurn])
     setLoading(true)
     setError(null)
 
@@ -56,16 +58,13 @@ export function ReportChat({ jobMarkdown, analysisContext }: ReportChatProps) {
         },
       })
 
-      if (!mountedRef.current) return
-
       if (response.type === 'CHAT_RESPONSE') {
-        setHistory([...newHistory, { role: 'assistant', content: response.payload.answer }])
-      } else {
+        onAppend([{ role: 'assistant', content: response.payload.answer }])
+      } else if (mountedRef.current) {
         setError(response.error || 'Something went wrong')
       }
     } catch (e) {
-      if (!mountedRef.current) return
-      setError((e as Error).message)
+      if (mountedRef.current) setError((e as Error).message)
     } finally {
       if (mountedRef.current) setLoading(false)
     }
@@ -81,17 +80,37 @@ export function ReportChat({ jobMarkdown, analysisContext }: ReportChatProps) {
       {history.length > 0 && (
         <div className="space-y-2">
           {history.map((turn, i) => (
-            <div key={i}>
+            <div key={i} className="group relative">
               {turn.role === 'user' ? (
-                <div className="flex gap-1.5">
+                <div className="flex gap-1.5 items-start">
                   <span className="text-xs font-medium text-primary shrink-0">You:</span>
-                  <p className="text-xs">{turn.content}</p>
+                  <p className="text-xs flex-1">{turn.content}</p>
                 </div>
               ) : (
                 <div
                   className="chat-response text-xs text-muted-foreground"
                   dangerouslySetInnerHTML={{ __html: marked.parse(turn.content, { async: false }) as string }}
                 />
+              )}
+              {pendingDelete === i ? (
+                <div className="absolute -right-1 top-0 flex items-center gap-1">
+                  <span className="text-[10px] text-destructive">delete?</span>
+                  <button
+                    onClick={() => { onDeleteTurn(i); setPendingDelete(null) }}
+                    className="p-0.5 rounded text-destructive cursor-pointer"
+                    title="Confirm delete"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setPendingDelete(i)}
+                  className="absolute -right-1 top-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-muted-foreground hover:text-destructive cursor-pointer"
+                  title="Remove turn"
+                >
+                  <Trash2 className="size-3" />
+                </button>
               )}
             </div>
           ))}

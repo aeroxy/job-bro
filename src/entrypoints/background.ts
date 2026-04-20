@@ -62,7 +62,8 @@ export default defineBackground(() => {
           message.payload.analysisContext,
           message.payload.previousResume,
           message.payload.previousSummary,
-          message.payload.comment
+          message.payload.comment,
+          message.payload.qnaHistory
         ).then(sendResponse).catch((e) => {
           sendResponse({ type: 'RESUME_ERROR', error: (e as Error).message })
         })
@@ -259,7 +260,8 @@ async function handleGenerateResume(
   analysisContext?: string,
   previousResume?: string,
   previousSummary?: string,
-  comment?: string
+  comment?: string,
+  qnaHistory?: import('@/types/chat').ChatTurn[]
 ): Promise<ResumeResponse> {
   const profile = await getProfile()
   if (!profile) {
@@ -279,7 +281,7 @@ async function handleGenerateResume(
     const result = await runResumeGenerator(
       jobMarkdown, profile, config,
       customPrompt || undefined,
-      analysisContext, previousResume, previousSummary, comment
+      analysisContext, previousResume, previousSummary, comment, qnaHistory
     )
     return { type: 'RESUME_RESULT', payload: { markdown: result.resume, summary: result.summary } }
   } catch (e) {

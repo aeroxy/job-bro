@@ -1,5 +1,10 @@
 import type { ExtractedJob } from '@/types/job'
 
+export function extractLinkedInJobId(url: string): string | null {
+  const m = url.match(/\/jobs\/view\/(\d+)/) ?? url.match(/[?&]currentJobId=(\d+)/)
+  return m?.[1] ?? null
+}
+
 export function isJobPostingPage(): boolean {
   const url = window.location.href
   const isJobUrl = /linkedin\.com\/jobs\/(view|collections|search)\//.test(url)
@@ -128,6 +133,7 @@ export function extractJob(): ExtractedJob {
   const { requirements, benefits } = parseListsFromDescription(description)
 
   return {
+    job_id: extractLinkedInJobId(window.location.href) ?? undefined,
     url: window.location.href,
     extracted_at: Date.now(),
     title: title || document.title.split('|')[0].trim(),
