@@ -26,12 +26,16 @@ interface AnalysisReportProps {
   progress: EvaluatorProgress
   analyzing: boolean
   job?: ExtractedJob | null
-  qnaHistory: ChatTurn[]
-  onAppendChat: (turns: ChatTurn[]) => void
-  onDeleteChatTurn: (index: number) => void
+  qnaHistory?: ChatTurn[]
+  chatLoading?: boolean
+  currentTabId?: number
+  onAppendChat?: (turns: ChatTurn[], targetTabId: number, nonce?: number) => void
+  onSetChatLoading?: (loading: boolean, targetTabId: number, nonce?: number) => void
+  onBumpChatNonce?: (tabId: number) => number
+  onDeleteChatTurn?: (index: number) => void
 }
 
-export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, onAppendChat, onDeleteChatTurn }: AnalysisReportProps) {
+export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, chatLoading, currentTabId, onAppendChat, onSetChatLoading, onBumpChatNonce, onDeleteChatTurn }: AnalysisReportProps) {
   const jobMarkdown = useMemo(() => (job ? jobToMarkdown(job) : ''), [job])
   const analysisContext = useMemo(() => (report ? formatAnalysisContext(report) : ''), [report])
 
@@ -153,12 +157,16 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, o
       )}
 
       {/* Chat */}
-      {report && job && (
+      {report && job && qnaHistory !== undefined && chatLoading !== undefined && currentTabId !== undefined && onAppendChat && onSetChatLoading && onBumpChatNonce && onDeleteChatTurn && (
         <ReportChat
           jobMarkdown={jobMarkdown}
           analysisContext={analysisContext}
           history={qnaHistory}
+          loading={chatLoading}
+          currentTabId={currentTabId}
           onAppend={onAppendChat}
+          onSetLoading={onSetChatLoading}
+          onBumpNonce={onBumpChatNonce}
           onDeleteTurn={onDeleteChatTurn}
         />
       )}

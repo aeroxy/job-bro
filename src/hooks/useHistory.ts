@@ -2,11 +2,65 @@ import { useCallback, useEffect, useState } from 'react'
 
 import {
   type AnalysisRecord,
-  clearAnalyses,
-  deleteAnalysis,
-  getAnalysis,
-  listAnalyses,
+  type PersistedSession,
+  clearSessions,
+  deleteSession,
+  getSessionByJobId,
+  listSessions,
+  saveSession,
 } from '@/lib/db'
+import { extractLinkedInJobId } from '@/extractor/linkedin'
+
+function sessionToRecord(s: PersistedSession): AnalysisRecord {
+  return {
+    id: s.job_id,
+    job: s.job,
+    report: s.report!,
+    createdAt: s.updatedAt,
+  }
+}
+
+async function openOrFocusTab(url: string, jobId?: string): Promise<void> {
+  if (jobId) {
+    const tabs = await chrome.tabs.query({})
+    const existing = tabs.find((t) => t.url && extractLinkedInJobId(t.url) === jobId)
+    if (existing?.id) {
+      await chrome.tabs.update(existing.id, { active: true })
+      if (existing.windowId) chrome.windows.update(existing.windowId, { focused: true })
+      return
+    }
+  }
+  chrome.tabs.create({ url })
+}
+
+export async function openRecordInLinkedIn(record: AnalysisRecord): Promise<void> {
+  await openOrFocusTab(record.job.url, record.job.job_id)
+}
+
+export async function restoreRecord(
+  record: AnalysisRecord,
+  onRestored?: (jobId: string) => void
+): Promise<void> {
+  if (!record.job.job_id) return
+
+  const existing = await getSessionByJobId(record.job.job_id)
+  if (existing?.qnaHistory?.length || existing?.resumeMarkdown) {
+    if (!confirm('This will clear Q&A and resume for this job. Continue?')) return
+  }
+
+  await saveSession({
+    job_id: record.job.job_id,
+    job: record.job,
+    report: record.report,
+    qnaHistory: [],
+    resumeMarkdown: null,
+    resumeSummary: null,
+    updatedAt: Date.now(),
+  })
+
+  onRestored?.(record.job.job_id)
+  await openOrFocusTab(record.job.url, record.job.job_id)
+}
 
 export function useHistory() {
   const [records, setRecords] = useState<AnalysisRecord[]>([])
@@ -14,8 +68,8 @@ export function useHistory() {
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    const all = await listAnalyses()
-    setRecords(all)
+    const sessions = await listSessions()
+    setRecords(sessions.filter((s) => s.report !== null).map(sessionToRecord))
     setLoading(false)
   }, [])
 
@@ -23,21 +77,20 @@ export function useHistory() {
     refresh()
   }, [refresh])
 
-  const remove = useCallback(
-    async (id: string) => {
-      await deleteAnalysis(id)
-      await refresh()
-    },
-    [refresh]
-  )
+  const remove = useCallback(async (id: string) => {
+    setRecords((prev) => prev.filter((r) => r.id !== id))
+    await deleteSession(id)
+  }, [])
 
   const clearAll = useCallback(async () => {
-    await clearAnalyses()
+    await clearSessions()
     await refresh()
   }, [refresh])
 
-  const get = useCallback(async (id: string) => {
-    return getAnalysis(id)
+  const get = useCallback(async (id: string): Promise<AnalysisRecord | undefined> => {
+    const session = await getSessionByJobId(id)
+    if (!session?.report) return undefined
+    return sessionToRecord(session)
   }, [])
 
   return { records, loading, refresh, remove, clearAll, get }

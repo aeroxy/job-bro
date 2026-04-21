@@ -44,11 +44,15 @@ Manages iterative resume generation.
 
 ### `useHistory`
 
-IndexedDB-backed analysis history.
+IndexedDB-backed analysis history sourced from the `sessions` store (sessions with a non-null report), mapped to `AnalysisRecord` shape (`id = job_id`, `createdAt = updatedAt`).
 
 **State:** `records[]`, `loading`
 
-**Methods:** `refresh()`, `remove(id)`, `clearAll()`, `get(id)`
+**Methods:** `refresh()`, `remove(id)` (optimistic — no scroll reset), `clearAll()`, `get(id)`
+
+**Standalone exports:**
+- `openRecordInLinkedIn(record)` — finds an existing tab by `job_id` and focuses it, or opens a new tab.
+- `restoreRecord(record, onRestored?)` — writes a fresh `PersistedSession` (clears Q&A and resume), calls `onRestored(jobId)`, then opens/focuses the tab. No-op if `job_id` is missing.
 
 ---
 
@@ -61,8 +65,11 @@ Top-level report renderer. Takes `AggregatedReport` and displays:
 - `EvaluatorCard` for each of the 5 evaluators (collapsible)
 - Key risks list
 - Negotiation tips list
+- `ReportChat` (only when all chat props are provided — omitted in `HistoryDetail`)
 
 Each evaluator card expands into a detail sub-component: `JobFitDetail`, `SalaryDetail`, `PreferenceDetail`, `RiskDetail`, `GrowthDetail`.
+
+All chat props (`qnaHistory`, `chatLoading`, `currentTabId`, `onAppendChat`, `onSetChatLoading`, `onBumpChatNonce`, `onDeleteChatTurn`) are optional — when absent, `ReportChat` is not rendered.
 
 ---
 
@@ -118,9 +125,18 @@ Download buttons:
 
 ### `HistoryList`
 
-Scrollable list of past `AnalysisRecord` entries:
-- Shows title, company, relative timestamp (`timeAgo()`), `VerdictBadge`
-- Trash icon per item, "Clear All" button
+Scrollable list of past analyses (sourced from `sessions` store, filtered to those with a report):
+- Shows title, company, compact relative timestamp (`14d`, `3h`, `just now`), `VerdictBadge`
+- Trash icon per row (hover-revealed) with `confirm()` before delete; delete is optimistic (no scroll reset)
+- "Clear All" button in header with `confirm()` guard
+- Props: `onSelect(id)`, `onBack()`, `onRestore?(jobId)`
+
+### `HistoryDetail`
+
+Read-only view of a past analysis, loaded by `job_id`:
+- Header: Back button + ExternalLink (open in LinkedIn) + RotateCcw (restore session) buttons
+- Body: `JobSummaryCard` + `AnalysisReport` (no chat panel)
+- Props: `analysisId`, `onBack()`, `onRestore?(jobId)`
 
 ---
 
@@ -134,6 +150,19 @@ Color-coded badge:
 Displays verdict text + `score/100`.
 
 ---
+
+### `ReportChat`
+
+Follow-up Q&A panel rendered inside `AnalysisReport` (live sessions only, not history).
+
+**Key behaviors:**
+- **Retry button** — shown when the last turn is a dangling user question (no assistant response). Fires immediately with local `retrying` state for instant feedback.
+- **Nonce system** — `chatNonce` lives in `TabSession`; bumped on every new request via `onBumpChatNonce`. `onAppend` and `onSetLoading(false)` are no-ops if nonce is stale, preventing double responses and premature spinner-clear across retry/unmount races.
+- **Scroll-to-bottom** — `prevLengthRef` guards scroll so it only fires when history grows, not on deletion.
+- **Loading→submit ordering** — `onSetLoading(true)` fires before `onAppend([userTurn])` so both land in the same React render batch; no frame where spinner is absent but history ends on a user turn.
+- **Tab-switch routing** — `targetTabId` is captured at submit time; `onAppend` and `onSetLoading` take explicit `targetTabId` so the response always routes to the originating tab even if `activeTabIdRef` has moved.
+- **Q&A dividers** — `border-t` separates each Q&A block (before every user turn except the first).
+- **Two-step delete** — per-turn delete requires a confirm.
 
 ### `ScoreBar`
 

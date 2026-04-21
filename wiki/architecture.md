@@ -77,10 +77,12 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `chrome.storage.local` | `profile` | `UserProfile` |
 | `chrome.storage.local` | `llmConfig` | `LLMConfig` |
 | `chrome.storage.local` | `customPrompt` | System prompt prefix string |
-| IndexedDB `job-bro` v1 | `analyses` | `AnalysisRecord[]` — audit log, keyed by UUID, indexed by `createdAt` / `company` |
-| IndexedDB `job-bro` v2 | `sessions` | `PersistedSession[]` — live state keyed by LinkedIn `job_id`, indexed by `updatedAt` |
+| IndexedDB `job-bro` v1 | `analyses` | `AnalysisRecord[]` — legacy audit log (unused; history now reads from `sessions`) |
+| IndexedDB `job-bro` v2 | `sessions` | `PersistedSession[]` — live state + history source, keyed by LinkedIn `job_id`, indexed by `updatedAt` |
 
 Sessions are hydrated automatically when the active tab matches a LinkedIn `/jobs/view/<id>/` URL. Q&A history, analysis, and resume state all persist across browser restarts.
+
+**Restore flow:** From History, clicking Restore on an `AnalysisRecord` writes a fresh `PersistedSession` to the `sessions` store (overwriting any existing one for that `job_id`), calls `invalidateHydration(jobId)` in `useTabSessions` to clear the hydration guard, then opens/focuses the LinkedIn tab — triggering automatic re-hydration with the restored data.
 
 ## Content Script Injection
 

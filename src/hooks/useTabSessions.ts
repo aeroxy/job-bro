@@ -44,6 +44,8 @@ interface TabSession {
   resumeSummary: string | null
   resumeError: string | null
   qnaHistory: ChatTurn[]
+  chatLoading: boolean
+  chatNonce: number  // incremented on each new request; stale responses are ignored
   // Track which job_id this session was hydrated from to avoid re-hydrating
   hydratedJobId: string | null
 }
@@ -60,6 +62,8 @@ const DEFAULT_SESSION: TabSession = {
   resumeSummary: null,
   resumeError: null,
   qnaHistory: [],
+  chatLoading: false,
+  chatNonce: 0,
   hydratedJobId: null,
 }
 
@@ -301,13 +305,29 @@ export function useTabSessions(
     await persistSession(tabId)
   }, [getSession, updateSessionAndRender, persistSession])
 
-  const appendChatTurns = useCallback(async (turns: ChatTurn[]) => {
-    const tabId = activeTabIdRef.current
-    if (!tabId) return
+  // Returns the new nonce; caller passes it back to appendChatTurns / setChatLoading
+  // so stale responses from superseded requests are silently dropped.
+  const bumpChatNonce = useCallback((tabId: number): number => {
     const session = getSession(tabId)
+    const nonce = session.chatNonce + 1
+    updateSession(tabId, { chatNonce: nonce })
+    return nonce
+  }, [getSession, updateSession])
+
+  const setChatLoading = useCallback((tabId: number, loading: boolean, nonce?: number) => {
+    if (!loading && nonce !== undefined) {
+      // Only clear loading if this request is still the active one
+      if (getSession(tabId).chatNonce !== nonce) return
+    }
+    updateSessionAndRender(tabId, { chatLoading: loading })
+  }, [getSession, updateSessionAndRender])
+
+  const appendChatTurns = useCallback(async (turns: ChatTurn[], targetTabId: number, nonce?: number) => {
+    const session = getSession(targetTabId)
+    if (nonce !== undefined && session.chatNonce !== nonce) return  // superseded by retry
     const newHistory = [...session.qnaHistory, ...turns]
-    updateSessionAndRender(tabId, { qnaHistory: newHistory })
-    await persistSession(tabId)
+    updateSessionAndRender(targetTabId, { qnaHistory: newHistory })
+    await persistSession(targetTabId)
   }, [getSession, updateSessionAndRender, persistSession])
 
   // Resume generation
@@ -418,6 +438,17 @@ export function useTabSessions(
     updateSessionAndRender(tabId, { view })
   }, [updateSessionAndRender])
 
+  const invalidateHydration = useCallback((jobId: string) => {
+    for (const [tabId, session] of sessionsRef.current.entries()) {
+      if (session.hydratedJobId === jobId) {
+        sessionsRef.current.set(tabId, { ...session, hydratedJobId: null })
+      }
+    }
+    if (activeTabIdRef.current) {
+      hydrateTab(activeTabIdRef.current)
+    }
+  }, [hydrateTab])
+
   // Current session for the active tab
   const current = activeTabId ? getSession(activeTabId) : DEFAULT_SESSION
 
@@ -437,7 +468,10 @@ export function useTabSessions(
     reset,
     // Q&A
     qnaHistory: current.qnaHistory,
+    chatLoading: current.chatLoading,
     appendChatTurns,
+    setChatLoading,
+    bumpChatNonce,
     deleteChatTurn,
     // Resume
     resumeStatus: current.resumeStatus,
@@ -447,5 +481,7 @@ export function useTabSessions(
     regenerateResume,
     setResumeMarkdown,
     resetResume,
+    // Session management
+    invalidateHydration,
   }
 }

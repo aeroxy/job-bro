@@ -10,13 +10,27 @@ interface ReportChatProps {
   jobMarkdown: string
   analysisContext: string
   history: ChatTurn[]
-  onAppend: (turns: ChatTurn[]) => void
+  loading: boolean
+  currentTabId: number
+  onAppend: (turns: ChatTurn[], targetTabId: number, nonce?: number) => void
+  onSetLoading: (loading: boolean, targetTabId: number, nonce?: number) => void
+  onBumpNonce: (tabId: number) => number
   onDeleteTurn: (index: number) => void
 }
 
-export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, onDeleteTurn }: ReportChatProps) {
-  const [loading, setLoading] = useState(false)
+export function ReportChat({
+  jobMarkdown,
+  analysisContext,
+  history,
+  loading,
+  currentTabId,
+  onAppend,
+  onSetLoading,
+  onBumpNonce,
+  onDeleteTurn,
+}: ReportChatProps) {
   const [error, setError] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<number | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
@@ -34,6 +48,41 @@ export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, on
     prevLengthRef.current = history.length
   }, [history.length])
 
+  // nonce is bumped by the caller before invoking; stale completions are dropped via nonce checks
+  async function sendQuestion(question: string, historyContext: ChatTurn[], tabId: number, nonce: number) {
+    setError(null)
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CHAT_REQUEST',
+        payload: { question, history: historyContext, jobMarkdown, analysisContext },
+      })
+      if (response.type === 'CHAT_RESPONSE') {
+        onAppend([{ role: 'assistant', content: response.payload.answer }], tabId, nonce)
+      } else if (mountedRef.current) {
+        setError(response.error || 'Something went wrong')
+      }
+    } catch (e) {
+      if (mountedRef.current) setError((e as Error).message)
+    } finally {
+      onSetLoading(false, tabId, nonce)
+    }
+  }
+
+  async function handleRetry() {
+    if (loading || retrying) return
+    const lastUserTurn = history.at(-1)
+    if (!lastUserTurn || lastUserTurn.role !== 'user') return
+    const tabId = currentTabId
+    setRetrying(true)
+    const nonce = onBumpNonce(tabId)
+    onSetLoading(true, tabId)
+    try {
+      await sendQuestion(lastUserTurn.content, history.slice(0, -1), tabId, nonce)
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = e.currentTarget
@@ -42,32 +91,15 @@ export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, on
     form.reset()
     setPendingDelete(null)
 
-    const userTurn: ChatTurn = { role: 'user', content: question }
-    onAppend([userTurn])
-    setLoading(true)
-    setError(null)
+    // Capture the tab this question belongs to — activeTabId may change before the response lands
+    const tabId = currentTabId
 
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'CHAT_REQUEST',
-        payload: {
-          question,
-          history,
-          jobMarkdown,
-          analysisContext,
-        },
-      })
-
-      if (response.type === 'CHAT_RESPONSE') {
-        onAppend([{ role: 'assistant', content: response.payload.answer }])
-      } else if (mountedRef.current) {
-        setError(response.error || 'Something went wrong')
-      }
-    } catch (e) {
-      if (mountedRef.current) setError((e as Error).message)
-    } finally {
-      if (mountedRef.current) setLoading(false)
-    }
+    // Bump nonce and set loading before appending the user turn — all land in the same render batch.
+    // User turns are not nonce-guarded (always append); only the assistant response and loading=false are.
+    const nonce = onBumpNonce(tabId)
+    onSetLoading(true, tabId)
+    onAppend([{ role: 'user', content: question }], tabId)
+    await sendQuestion(question, history, tabId, nonce)
   }
 
   return (
@@ -78,9 +110,9 @@ export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, on
       </h4>
 
       {history.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-0">
           {history.map((turn, i) => (
-            <div key={i} className="group relative">
+            <div key={i} className={`group relative${turn.role === 'user' && i > 0 ? ' border-t border-border pt-3 mt-1' : ''} ${turn.role === 'assistant' ? 'pt-1.5 pb-2' : 'pb-0'}`}>
               {turn.role === 'user' ? (
                 <div className="flex gap-1.5 items-start">
                   <span className="text-xs font-medium text-primary shrink-0">You:</span>
@@ -93,7 +125,7 @@ export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, on
                 />
               )}
               {pendingDelete === i ? (
-                <div className="absolute -right-1 top-0 flex items-center gap-1">
+                <div className="absolute -right-1 top-2 flex items-center gap-1">
                   <span className="text-[10px] text-destructive">delete?</span>
                   <button
                     onClick={() => { onDeleteTurn(i); setPendingDelete(null) }}
@@ -106,7 +138,7 @@ export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, on
               ) : (
                 <button
                   onClick={() => setPendingDelete(i)}
-                  className="absolute -right-1 top-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-muted-foreground hover:text-destructive cursor-pointer"
+                  className="absolute -right-1 top-2 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-muted-foreground hover:text-destructive cursor-pointer"
                   title="Remove turn"
                 >
                   <Trash2 className="size-3" />
@@ -117,14 +149,26 @@ export function ReportChat({ jobMarkdown, analysisContext, history, onAppend, on
         </div>
       )}
 
-      {loading && (
+      {(loading || retrying) && (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Spinner className="size-3" />
           Thinking...
         </div>
       )}
 
-      {error && (
+      {!loading && !retrying && history.at(-1)?.role === 'user' && (
+        <div className="flex items-center gap-2">
+          {error && <p className="text-xs text-destructive flex-1">{error}</p>}
+          <button
+            onClick={handleRetry}
+            className="text-xs text-muted-foreground hover:text-foreground underline cursor-pointer shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {error && history.at(-1)?.role !== 'user' && (
         <p className="text-xs text-destructive">{error}</p>
       )}
 

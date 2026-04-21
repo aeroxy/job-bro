@@ -66,11 +66,32 @@
 
 ```
 1. User opens History → HistoryList
-2. useHistory.refresh() → listAnalyses() from IndexedDB (sorted by createdAt desc)
-3. Each entry shows: title, company, timestamp, VerdictBadge
-4. Clicking entry → HistoryDetail → getAnalysis(id) → renders JobSummaryCard + AnalysisReport
-5. Trash icon → deleteAnalysis(id) → refresh()
-6. "Clear All" → clearAnalyses() → refresh()
+2. useHistory.refresh() → listSessions() from IndexedDB, filtered to sessions with report, sorted by updatedAt desc
+3. Each entry shows: title, company, compact timestamp (14d/3h/just now), VerdictBadge
+4. Clicking entry → HistoryDetail (read-only: JobSummaryCard + AnalysisReport, no chat)
+5. Trash icon (with confirm) → deleteSession(job_id) → optimistic state update (no scroll reset)
+6. "Clear All" (with confirm) → clearSessions() → refresh()
+7. ExternalLink in detail header → openOrFocusTab(url, job_id) — focuses existing tab or opens new
+8. RotateCcw in detail header → restoreRecord() → saves fresh PersistedSession (clears Q&A/resume)
+   → invalidateHydration(jobId) in useTabSessions → panel re-hydrates from new session
+   → navigates to LinkedIn URL → setGlobalView(null) closes history
+```
+
+---
+
+## Report Chat (Q&A)
+
+```
+1. User types a question in ReportChat and submits
+2. targetTabId captured at submit time; chatNonce bumped via onBumpChatNonce
+3. onSetChatLoading(true, tabId, nonce) fires first → then onAppend([userTurn], tabId, nonce)
+   → both in same render batch; no frame where spinner is absent but last turn is user
+4. CHAT_REQUEST → background → LLM → CHAT_RESPONSE
+5. onAppend([assistantTurn], tabId, nonce) — no-op if nonce is stale
+6. onSetChatLoading(false, tabId, nonce) — no-op if nonce is stale
+7. If last turn is a dangling user question → Retry button appears
+8. Retry bumps nonce again, shows local retrying state immediately, re-sends request
+9. Tab switch: response routes to captured targetTabId, not active tab at response time
 ```
 
 ---

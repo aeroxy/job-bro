@@ -54,7 +54,10 @@ export default function App() {
     stop,
     reset,
     qnaHistory,
+    chatLoading,
     appendChatTurns,
+    setChatLoading,
+    bumpChatNonce,
     deleteChatTurn,
     resumeStatus,
     resumeMarkdown,
@@ -63,7 +66,13 @@ export default function App() {
     regenerateResume,
     setResumeMarkdown,
     resetResume,
+    invalidateHydration,
   } = useTabSessions(activeTabId, onTabRemoved)
+
+  const handleRestore = useCallback((jobId: string) => {
+    invalidateHydration(jobId)
+    setGlobalView(null)
+  }, [invalidateHydration])
 
   const handleExtract = useCallback(async () => {
     await extract()
@@ -123,6 +132,7 @@ export default function App() {
       <HistoryList
         onSelect={(id) => setGlobalView({ name: 'history-detail', analysisId: id })}
         onBack={() => setGlobalView(null)}
+        onRestore={handleRestore}
       />
     )
   }
@@ -132,6 +142,7 @@ export default function App() {
       <HistoryDetail
         analysisId={globalView.analysisId}
         onBack={() => setGlobalView({ name: 'history' })}
+        onRestore={handleRestore}
       />
     )
   }
@@ -322,7 +333,11 @@ export default function App() {
           analyzing={status === 'analyzing'}
           job={job}
           qnaHistory={qnaHistory}
+          chatLoading={chatLoading}
+          currentTabId={activeTabId!}
           onAppendChat={appendChatTurns}
+          onSetChatLoading={setChatLoading}
+          onBumpChatNonce={bumpChatNonce}
           onDeleteChatTurn={deleteChatTurn}
         />
 

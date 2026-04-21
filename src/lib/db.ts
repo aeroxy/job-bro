@@ -119,3 +119,8 @@ export async function deleteSession(jobId: string): Promise<void> {
   const db = await getDB()
   await db.delete('sessions', jobId)
 }
+
+export async function clearSessions(): Promise<void> {
+  const db = await getDB()
+  await db.clear('sessions')
+}

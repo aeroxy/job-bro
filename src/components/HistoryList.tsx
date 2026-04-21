@@ -8,20 +8,21 @@ import { Spinner } from '@/components/ui/spinner'
 interface HistoryListProps {
   onSelect: (id: string) => void
   onBack: () => void
+  onRestore?: (jobId: string) => void
 }
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts
   const minutes = Math.floor(diff / 60000)
   if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return `${hours}h`
   const days = Math.floor(hours / 24)
-  return `${days}d ago`
+  return `${days}d`
 }
 
-export function HistoryList({ onSelect, onBack }: HistoryListProps) {
+export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
   const { records, loading, remove, clearAll } = useHistory()
 
   return (
@@ -37,7 +38,7 @@ export function HistoryList({ onSelect, onBack }: HistoryListProps) {
           <Button
             variant="ghost"
             size="sm"
-            onClick={clearAll}
+            onClick={() => confirm('Clear all history?') && clearAll()}
             className="text-xs text-destructive hover:text-destructive cursor-pointer"
           >
             Clear All
@@ -70,13 +71,13 @@ export function HistoryList({ onSelect, onBack }: HistoryListProps) {
                         <Building2 className="size-2.5" />
                         {record.job.company}
                       </span>
-                      <span className="inline-flex items-center gap-0.5">
+                      <span className="inline-flex items-center gap-0.5 whitespace-nowrap">
                         <Clock className="size-2.5" />
                         {timeAgo(record.createdAt)}
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <VerdictBadge
                       verdict={record.report.verdict}
                       score={record.report.overall_score}
@@ -87,7 +88,7 @@ export function HistoryList({ onSelect, onBack }: HistoryListProps) {
                       size="icon-sm"
                       onClick={(e) => {
                         e.stopPropagation()
-                        remove(record.id)
+                        if (confirm('Delete this analysis?')) remove(record.id)
                       }}
                       className="opacity-0 group-hover:opacity-100 cursor-pointer size-6"
                     >

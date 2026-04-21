@@ -1,19 +1,20 @@
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ExternalLink, RotateCcw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import type { AnalysisRecord } from '@/lib/db'
-import { useHistory } from '@/hooks/useHistory'
+import { openRecordInLinkedIn, restoreRecord, useHistory } from '@/hooks/useHistory'
 import { JobSummaryCard } from './JobSummaryCard'
 import { AnalysisReport } from './AnalysisReport'
 
 interface HistoryDetailProps {
   analysisId: string
   onBack: () => void
+  onRestore?: (jobId: string) => void
 }
 
-export function HistoryDetail({ analysisId, onBack }: HistoryDetailProps) {
+export function HistoryDetail({ analysisId, onBack, onRestore }: HistoryDetailProps) {
   const { get } = useHistory()
   const [record, setRecord] = useState<AnalysisRecord | null>(null)
   const [loading, setLoading] = useState(true)
@@ -69,11 +70,34 @@ export function HistoryDetail({ analysisId, onBack }: HistoryDetailProps) {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      <header className="flex items-center gap-2 border-b px-3 py-2">
-        <Button variant="ghost" size="icon-sm" onClick={onBack} className="cursor-pointer">
-          <ArrowLeft className="size-3.5" />
-        </Button>
-        <span className="text-sm font-medium">Analysis Detail</span>
+      <header className="flex items-center justify-between border-b px-3 py-2">
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon-sm" onClick={onBack} className="cursor-pointer">
+            <ArrowLeft className="size-3.5" />
+          </Button>
+          <span className="text-sm font-medium">Analysis Detail</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Open in LinkedIn"
+            onClick={() => openRecordInLinkedIn(record)}
+            className="cursor-pointer"
+          >
+            <ExternalLink className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Restore session"
+            disabled={!record.job.job_id}
+            onClick={() => restoreRecord(record, onRestore)}
+            className="cursor-pointer"
+          >
+            <RotateCcw className="size-3.5" />
+          </Button>
+        </div>
       </header>
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         <JobSummaryCard job={record.job} />
