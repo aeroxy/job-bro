@@ -94,6 +94,14 @@ export function getVerdict(score: number, evaluators: EvaluatorResults): Verdict
 
   if (hasHighRisk && hasDealBreakerConflict) return 'Skip'
 
+  // Override: severe job-fit deficit → cap at Maybe regardless of other scores.
+  // Pairs with the job-fit prompt's domain-mismatch cap so wrong-domain roles
+  // never reach "Strong Apply" on the strength of leadership/scaling signals alone.
+  const fit = evaluators.job_fit.status === 'fulfilled' ? evaluators.job_fit.result : null
+  if (fit && (num(fit.skill_match) < 0.5 || num(fit.overall_fit) < 0.5) && score >= 70) {
+    return 'Maybe'
+  }
+
   // Override: salary risk + below alignment → cap at Maybe
   const hasSalaryRisk =
     evaluators.salary.status === 'fulfilled' &&
