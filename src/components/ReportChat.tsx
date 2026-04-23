@@ -13,7 +13,7 @@ interface ReportChatProps {
   loading: boolean
   currentTabId: number
   onAppend: (turns: ChatTurn[], targetTabId: number, nonce?: number) => void
-  onSetLoading: (loading: boolean, targetTabId: number, nonce?: number) => void
+  onSetLoading: (tabId: number, loading: boolean, nonce?: number) => void
   onBumpNonce: (tabId: number) => number
   onDeleteTurn: (index: number) => void
 }
@@ -64,7 +64,7 @@ export function ReportChat({
     } catch (e) {
       if (mountedRef.current) setError((e as Error).message)
     } finally {
-      onSetLoading(false, tabId, nonce)
+      onSetLoading(tabId, false, nonce)
     }
   }
 
@@ -75,7 +75,7 @@ export function ReportChat({
     const tabId = currentTabId
     setRetrying(true)
     const nonce = onBumpNonce(tabId)
-    onSetLoading(true, tabId)
+    onSetLoading(tabId, true)
     try {
       await sendQuestion(lastUserTurn.content, history.slice(0, -1), tabId, nonce)
     } finally {
@@ -97,7 +97,7 @@ export function ReportChat({
     // Bump nonce and set loading before appending the user turn — all land in the same render batch.
     // User turns are not nonce-guarded (always append); only the assistant response and loading=false are.
     const nonce = onBumpNonce(tabId)
-    onSetLoading(true, tabId)
+    onSetLoading(tabId, true)
     onAppend([{ role: 'user', content: question }], tabId)
     await sendQuestion(question, history, tabId, nonce)
   }

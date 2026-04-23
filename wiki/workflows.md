@@ -84,11 +84,11 @@
 ```
 1. User types a question in ReportChat and submits
 2. targetTabId captured at submit time; chatNonce bumped via onBumpChatNonce
-3. onSetChatLoading(true, tabId, nonce) fires first → then onAppend([userTurn], tabId, nonce)
+3. onSetChatLoading(tabId, true, nonce) fires first → then onAppend([userTurn], tabId, nonce)
    → both in same render batch; no frame where spinner is absent but last turn is user
 4. CHAT_REQUEST → background → LLM → CHAT_RESPONSE
 5. onAppend([assistantTurn], tabId, nonce) — no-op if nonce is stale
-6. onSetChatLoading(false, tabId, nonce) — no-op if nonce is stale
+6. onSetChatLoading(tabId, false, nonce) — no-op if nonce is stale
 7. If last turn is a dangling user question → Retry button appears
 8. Retry bumps nonce again, shows local retrying state immediately, re-sends request
 9. Tab switch: response routes to captured targetTabId, not active tab at response time

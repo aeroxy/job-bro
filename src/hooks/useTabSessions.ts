@@ -240,6 +240,7 @@ export function useTabSessions(
     updateSessionAndRender(tabId, {
       status: 'analyzing',
       error: null,
+      report: null,
       progress: { ...INITIAL_PROGRESS },
     })
 

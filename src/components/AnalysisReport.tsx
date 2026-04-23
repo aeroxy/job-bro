@@ -30,7 +30,7 @@ interface AnalysisReportProps {
   chatLoading?: boolean
   currentTabId?: number
   onAppendChat?: (turns: ChatTurn[], targetTabId: number, nonce?: number) => void
-  onSetChatLoading?: (loading: boolean, targetTabId: number, nonce?: number) => void
+  onSetChatLoading?: (tabId: number, loading: boolean, nonce?: number) => void
   onBumpChatNonce?: (tabId: number) => number
   onDeleteChatTurn?: (index: number) => void
 }
@@ -40,6 +40,17 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
   const analysisContext = useMemo(() => (report ? formatAnalysisContext(report) : ''), [report])
 
   if (!report && !analyzing) return null
+  if (!report && analyzing) {
+    return (
+      <div className="border rounded-lg p-3 space-y-2 animate-pulse">
+        <div className="h-5 w-24 rounded bg-muted" />
+        <div className="space-y-1.5">
+          <div className="h-3 rounded bg-muted" />
+          <div className="h-3 w-4/5 rounded bg-muted" />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-3">
@@ -52,7 +63,7 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           )}
           <p className="text-xs text-muted-foreground leading-relaxed">{report.reasoning}</p>
         </div>
-      ) : progress.summary === 'running' && (
+      ) : (
         <div className="border rounded-lg p-3 space-y-2 animate-pulse">
           <div className="h-5 w-24 rounded bg-muted" />
           <div className="space-y-1.5">

@@ -27,7 +27,7 @@
 
 ## Extension Metadata
 
-- **Version:** 0.1.1
+- **Version:** 0.1.9
 - **Manifest:** V3
 - **Permissions:** `sidePanel`, `storage`, `activeTab`, `tabs`, `scripting`
 - **Host Permissions:** `*://www.linkedin.com/*`
