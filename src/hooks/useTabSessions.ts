@@ -32,6 +32,15 @@ const INITIAL_PROGRESS: EvaluatorProgress = {
   summary: 'pending',
 }
 
+const COMPLETED_PROGRESS: EvaluatorProgress = {
+  job_fit: 'completed',
+  salary: 'completed',
+  preference: 'completed',
+  risk: 'completed',
+  growth: 'completed',
+  summary: 'completed',
+}
+
 interface TabSession {
   view: TabView
   status: AnalysisStatus
@@ -150,6 +159,7 @@ export function useTabSessions(
       resumeSummary: persisted.resumeSummary,
       resumeStatus: persisted.resumeMarkdown ? 'done' : 'idle',
       status: persisted.report ? 'done' : 'idle',
+      progress: persisted.report ? { ...COMPLETED_PROGRESS } : { ...INITIAL_PROGRESS },
     })
   }, [updateSessionAndRender])
 
