@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react'
 
-import { DEFAULT_EXPECTED_IO, chromeDownloadMonitor, withChromeAiLock } from '@/lib/chrome-prompt-client'
+import { DEFAULT_EXPECTED_IO, chromeDownloadMonitor, tempToTopK, withChromeAiLock } from '@/lib/chrome-prompt-client'
+
+// Chat tuning. Slightly warmer than evaluator default (0.3) since Q&A benefits
+// from a bit of variation. topK derives from temperature via the same
+// heuristic chatCompletionChrome uses.
+const CHAT_TEMPERATURE = 0.4
 import type { ChatTurn } from '@/types/chat'
 
 interface CachedSession {
@@ -81,8 +86,8 @@ export function useChromeChatSession() {
           }
           const session = await globalThis.LanguageModel.create({
             initialPrompts,
-            temperature: 0.4,
-            topK: 8,
+            temperature: CHAT_TEMPERATURE,
+            topK: tempToTopK(CHAT_TEMPERATURE),
             expectedInputs: DEFAULT_EXPECTED_IO,
             expectedOutputs: DEFAULT_EXPECTED_IO,
             monitor: chromeDownloadMonitor(),

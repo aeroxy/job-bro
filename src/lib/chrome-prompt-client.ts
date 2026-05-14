@@ -84,7 +84,7 @@ export async function ensureChromeAiDownloaded(signal?: AbortSignal): Promise<vo
   session.destroy()
 }
 
-function tempToTopK(temperature: number): number {
+export function tempToTopK(temperature: number): number {
   // Heuristic: lower temp → tighter top-K. Chrome accepts roughly 1..40.
   if (temperature <= 0.2) return 1
   if (temperature <= 0.5) return 3
