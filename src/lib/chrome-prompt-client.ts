@@ -179,6 +179,18 @@ export async function chatCompletionChrome(
     try {
       session = await createSession(systemPrompt, head, temperature, signal)
 
+      // responseConstraint is best-effort on Gemini Nano: the API surface is
+      // experimental, and current builds have been observed to honor it
+      // partially, ignore it for complex schemas, or wrap output in markdown
+      // fences. We use the most permissive schema possible (any object) to
+      // maximize the chance the model cooperates without over-constraining.
+      //
+      // The actual JSON extraction safety net is parseJSON() in llm-client.ts,
+      // which strips fences and extracts the outermost {...} block from
+      // anything the model returns. DO NOT pre-parse, sanitize, or strip
+      // fences here — keep this function returning the raw model output so
+      // parseJSON's full recovery path runs uniformly across both backends.
+      // Validation/retry happens at the runWithValidation layer.
       const promptOpts: ChromeAiPromptOptions = { signal }
       if (json_mode) promptOpts.responseConstraint = PERMISSIVE_JSON_SCHEMA
 
