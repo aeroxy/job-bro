@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 
-import { chromeDownloadMonitor } from '@/lib/chrome-prompt-client'
+import { chromeDownloadMonitor, withChromeAiLock } from '@/lib/chrome-prompt-client'
 import type { ChatTurn } from '@/types/chat'
 
 interface CachedSession {
@@ -62,34 +62,57 @@ export function useChromeChatSession() {
     }
 
     try {
-      let cached = cacheRef.current
-      const needsRebuild =
-        !cached ||
-        cached.systemPrompt !== systemPrompt ||
-        cached.knownLength !== history.length
+      // Serialize against all other Chrome AI work in the app (e.g. evaluators
+      // running concurrently). The per-hook lock above only orders calls
+      // within this hook instance; withChromeAiLock is the global queue.
+      return await withChromeAiLock(async () => {
+        let cached = cacheRef.current
+        const needsRebuild =
+          !cached ||
+          cached.systemPrompt !== systemPrompt ||
+          cached.knownLength !== history.length
 
-      if (needsRebuild) {
-        cached?.session.destroy()
-        cacheRef.current = null  // clear before await so a failed create leaves no dangling reference
-        const initialPrompts: ChromeAiPromptMessage[] = [{ role: 'system', content: systemPrompt }]
-        for (const turn of history) {
-          initialPrompts.push({ role: turn.role, content: turn.content })
+        if (needsRebuild) {
+          cached?.session.destroy()
+          cacheRef.current = null  // clear before await so a failed create leaves no dangling reference
+          const initialPrompts: ChromeAiPromptMessage[] = [{ role: 'system', content: systemPrompt }]
+          for (const turn of history) {
+            initialPrompts.push({ role: turn.role, content: turn.content })
+          }
+          const session = await globalThis.LanguageModel.create({
+            initialPrompts,
+            temperature: 0.4,
+            topK: 8,
+            expectedInputs: [{ type: 'text', languages: ['en'] }],
+            expectedOutputs: [{ type: 'text', languages: ['en'] }],
+            monitor: chromeDownloadMonitor(),
+          })
+          cached = { session, systemPrompt, knownLength: history.length }
+          cacheRef.current = cached
         }
-        const session = await globalThis.LanguageModel.create({
-          initialPrompts,
-          temperature: 0.4,
-          topK: 8,
-          expectedInputs: [{ type: 'text', languages: ['en'] }],
-          expectedOutputs: [{ type: 'text', languages: ['en'] }],
-          monitor: chromeDownloadMonitor(),
-        })
-        cached = { session, systemPrompt, knownLength: history.length }
-        cacheRef.current = cached
-      }
 
-      const answer = await cached!.session.prompt(question, { signal })
-      cached!.knownLength += 2  // user question + the just-produced assistant answer
-      return answer
+        // Chrome's session.prompt() mutates internal state (commits the user
+        // turn) before resolving. A throw or an empty response can leave the
+        // session out of sync with our UI history — discard it in either case
+        // so the next call rebuilds from clean state.
+        let answer: string
+        try {
+          answer = await cached!.session.prompt(question, { signal })
+        } catch (e) {
+          cached!.session.destroy()
+          if (cacheRef.current === cached) cacheRef.current = null
+          throw e
+        }
+
+        if (!answer) {
+          cached!.session.destroy()
+          if (cacheRef.current === cached) cacheRef.current = null
+          throw new Error('Chrome AI returned an empty response (likely a safety filter or internal error)')
+        }
+
+        cached!.knownLength += 2  // user question + the just-produced assistant answer
+        return answer
+      })
     } finally {
       release()
     }

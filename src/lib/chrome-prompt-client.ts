@@ -13,6 +13,26 @@ export type ChromeChatOptions = {
 type DownloadProgressListener = (loaded: number) => void
 const progressListeners = new Set<DownloadProgressListener>()
 
+// App-wide serializer for Chrome AI work. Gemini Nano is one in-process model
+// instance: concurrent prompts compete for it (some Chrome builds queue
+// gracefully, others throw "model busy"), and concurrent session.create()
+// calls each materialize their own KV-cache prefix — running 5 evaluators in
+// parallel would peak at 5× the memory for no wall-clock benefit since Chrome
+// serializes inference internally anyway.
+//
+// All entry points to LanguageModel — chatCompletionChrome (evaluators,
+// resume) and useChromeChatSession.askChrome (chat) — should run their
+// session-touching critical section inside withChromeAiLock so we have a
+// single global FIFO across the whole app.
+let chromeQueue: Promise<unknown> = Promise.resolve()
+
+export function withChromeAiLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = chromeQueue.then(fn, fn)
+  // Swallow rejections in the chain so a failed call doesn't poison the queue.
+  chromeQueue = next.catch(() => {})
+  return next as Promise<T>
+}
+
 // Subscribe to download-progress events from any session created via the
 // helpers in this module OR via attachDownloadMonitor.
 // Returns an unsubscribe fn. Hook this up once from useChromeAiStatus.
@@ -135,17 +155,25 @@ export async function chatCompletionChrome(
   }
   const head = conversation.slice(0, -1)
 
-  let session: ChromeAiSession | null = null
-  try {
-    session = await createSession(systemPrompt, head, temperature, signal)
+  // Serialize against all other Chrome AI work so 5 parallel evaluators don't
+  // each materialize a session simultaneously. See withChromeAiLock.
+  return withChromeAiLock(async () => {
+    if (signal?.aborted) {
+      throw new DOMException('chatCompletionChrome aborted before start', 'AbortError')
+    }
 
-    const promptOpts: ChromeAiPromptOptions = { signal }
-    if (json_mode) promptOpts.responseConstraint = PERMISSIVE_JSON_SCHEMA
+    let session: ChromeAiSession | null = null
+    try {
+      session = await createSession(systemPrompt, head, temperature, signal)
 
-    const out = await session.prompt(last.content, promptOpts)
-    if (!out) throw new Error('Chrome AI returned empty response')
-    return out
-  } finally {
-    session?.destroy()
-  }
+      const promptOpts: ChromeAiPromptOptions = { signal }
+      if (json_mode) promptOpts.responseConstraint = PERMISSIVE_JSON_SCHEMA
+
+      const out = await session.prompt(last.content, promptOpts)
+      if (!out) throw new Error('Chrome AI returned empty response')
+      return out
+    } finally {
+      session?.destroy()
+    }
+  })
 }
