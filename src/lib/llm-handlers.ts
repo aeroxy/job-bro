@@ -5,6 +5,7 @@
 import { runResumeGenerator } from '@/evaluators/resume'
 import { runAllEvaluators } from '@/evaluators/runner'
 import { jobToMarkdown } from '@/extractor/markdown'
+import { SYSTEM_PROMPT_SEPARATOR } from '@/lib/chrome-prompt-client'
 import { chatCompletion } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
 import { getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
@@ -99,6 +100,24 @@ export async function runResume(
   } catch (e) {
     return { ok: false, error: (e as Error).message }
   }
+}
+
+// Single combined system prompt for the Chrome chat path. Chrome's
+// LanguageModel only accepts one system message, so the custom user prompt and
+// the built-in chat system prompt — which the cloud path sends as two separate
+// system messages in runChat — must be folded here. Uses the same separator
+// chatCompletionChrome's splitMessages would have used, so the two backends
+// produce byte-identical system content.
+export function buildChromeChatSystemPrompt(
+  customPrompt: string | undefined,
+  profile: UserProfile,
+  jobMarkdown: string,
+  analysisContext: string,
+): string {
+  const parts: string[] = []
+  if (customPrompt?.trim()) parts.push(customPrompt.trim())
+  parts.push(buildChatSystemPrompt(profile, jobMarkdown, analysisContext))
+  return parts.join(SYSTEM_PROMPT_SEPARATOR)
 }
 
 export function buildChatSystemPrompt(profile: UserProfile, jobMarkdown: string, analysisContext: string): string {

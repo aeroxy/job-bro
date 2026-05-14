@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { useChromeChatSession } from '@/hooks/useChromeChatSession'
-import { buildChatSystemPrompt } from '@/lib/llm-handlers'
+import { buildChromeChatSystemPrompt } from '@/lib/llm-handlers'
 import type { ChatTurn } from '@/types/chat'
 import type { UserProfile } from '@/types/profile'
 
@@ -66,10 +66,7 @@ export function ReportChat({
     try {
       if (useChromeBackend && profile) {
         // In-window dispatch via persistent Chrome AI session.
-        const systemParts: string[] = []
-        if (customPrompt?.trim()) systemParts.push(customPrompt.trim())
-        systemParts.push(buildChatSystemPrompt(profile, jobMarkdown, analysisContext))
-        const systemPrompt = systemParts.join('\n\n---\n\n')
+        const systemPrompt = buildChromeChatSystemPrompt(customPrompt, profile, jobMarkdown, analysisContext)
         const answer = await askChrome(systemPrompt, historyContext, question)
         onAppend([{ role: 'assistant', content: answer }], tabId, nonce)
       } else {
