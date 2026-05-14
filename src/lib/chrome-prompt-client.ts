@@ -58,6 +58,13 @@ const PERMISSIVE_JSON_SCHEMA = { type: 'object' } as const
 // Update here when adding multi-language support.
 export const DEFAULT_EXPECTED_IO: ChromeAiExpectedIO[] = [{ type: 'text', languages: ['en'] }]
 
+// Separator used when folding multiple system messages into the single system
+// prompt Chrome's LanguageModel API accepts. Used by splitMessages here AND by
+// any caller that needs to pre-fold (e.g. the persistent chat session hook,
+// which can't use chatCompletionChrome directly). Keep both call sites
+// referencing this constant so prompt boundaries stay byte-identical.
+export const SYSTEM_PROMPT_SEPARATOR = '\n\n---\n\n'
+
 export async function getChromeAiAvailability(): Promise<ChromeAiAvailability> {
   if (typeof globalThis.LanguageModel === 'undefined') return 'unavailable'
   try {
@@ -103,7 +110,7 @@ function splitMessages(messages: ChatMessage[]): {
     else conversation.push(m)
   }
   return {
-    systemPrompt: systems.length > 0 ? systems.join('\n\n---\n\n') : null,
+    systemPrompt: systems.length > 0 ? systems.join(SYSTEM_PROMPT_SEPARATOR) : null,
     conversation,
   }
 }
