@@ -3,9 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
+import type { LLMConfig } from '@/types/profile'
 import type { AnalysisProgressMessage } from '@/types/messages'
 import { getSessionByJobId, saveSession } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
+import { runAnalysis, runResume } from '@/lib/llm-handlers'
 
 export type AnalysisStatus = 'idle' | 'extracting' | 'analyzing' | 'done' | 'error'
 export type ResumeStatus = 'idle' | 'generating' | 'done' | 'error'
@@ -79,12 +81,21 @@ const DEFAULT_SESSION: TabSession = {
 export function useTabSessions(
   activeTabId: number | null,
   onTabRemoved: Set<(tabId: number) => void>,
+  llmConfig: LLMConfig,
 ) {
   const sessionsRef = useRef(new Map<number, TabSession>())
   // Increment to force re-render when the active tab's session changes
   const [, setTick] = useState(0)
   const rerender = useCallback(() => setTick((t) => t + 1), [])
   const cancelledRef = useRef(new Set<number>())
+  // AbortControllers for in-sidepanel runs (Chrome backend). Background backend
+  // uses CANCEL_ANALYSIS messages instead.
+  const localControllersRef = useRef(new Map<number, AbortController>())
+
+  // Track current backend in a ref so callbacks see the latest value without
+  // needing to re-create on every config change.
+  const backendRef = useRef<LLMConfig['backend']>(llmConfig.backend)
+  backendRef.current = llmConfig.backend
 
   // Helper: get or create a session for a tab
   const getSession = useCallback((tabId: number): TabSession => {
@@ -254,6 +265,36 @@ export function useTabSessions(
       progress: { ...INITIAL_PROGRESS },
     })
 
+    if (backendRef.current === 'chrome-prompt') {
+      // In-sidepanel execution path. Spin up a local AbortController; cancel via stop().
+      localControllersRef.current.get(tabId)?.abort()
+      const controller = new AbortController()
+      localControllersRef.current.set(tabId, controller)
+      try {
+        const result = await runAnalysis(extractedJob, controller.signal, (evaluator, status) => {
+          const session = sessionsRef.current.get(tabId)
+          if (!session) return
+          const newProgress = { ...session.progress, [evaluator]: status }
+          sessionsRef.current.set(tabId, { ...session, progress: newProgress })
+          if (tabId === activeTabIdRef.current) rerender()
+        })
+        if (cancelledRef.current.has(tabId)) return null
+        if (result.ok) {
+          updateSessionAndRender(tabId, { report: result.report, status: 'done' })
+          await persistSession(tabId)
+          return result.report
+        }
+        updateSessionAndRender(tabId, { error: result.error, status: 'error' })
+        return null
+      } catch (e) {
+        if (cancelledRef.current.has(tabId)) return null
+        updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
+        return null
+      } finally {
+        localControllersRef.current.delete(tabId)
+      }
+    }
+
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'ANALYZE_JD',
@@ -276,13 +317,17 @@ export function useTabSessions(
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
       return null
     }
-  }, [updateSessionAndRender, persistSession])
+  }, [updateSessionAndRender, persistSession, rerender])
 
   const stop = useCallback(() => {
     const tabId = activeTabIdRef.current
     if (!tabId) return
 
     cancelledRef.current.add(tabId)
+    // Abort the in-sidepanel run if any (Chrome backend), and notify background
+    // for the HTTP backend. Both are idempotent.
+    localControllersRef.current.get(tabId)?.abort()
+    localControllersRef.current.delete(tabId)
     chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId }).catch(() => {})
     updateSessionAndRender(tabId, {
       status: 'idle',
@@ -296,6 +341,8 @@ export function useTabSessions(
     if (!tabId) return
 
     cancelledRef.current.add(tabId)
+    localControllersRef.current.get(tabId)?.abort()
+    localControllersRef.current.delete(tabId)
     updateSessionAndRender(tabId, {
       status: 'idle',
       job: null,
@@ -355,6 +402,21 @@ export function useTabSessions(
       resumeSummary: null,
     })
 
+    if (backendRef.current === 'chrome-prompt') {
+      const result = await runResume(job, analysisContext, undefined, undefined, undefined, session.qnaHistory)
+      if (result.ok) {
+        updateSessionAndRender(tabId, {
+          resumeMarkdown: result.markdown,
+          resumeSummary: result.summary,
+          resumeStatus: 'done',
+        })
+        await persistSession(tabId)
+      } else {
+        updateSessionAndRender(tabId, { resumeError: result.error, resumeStatus: 'error' })
+      }
+      return
+    }
+
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'GENERATE_RESUME',
@@ -392,6 +454,28 @@ export function useTabSessions(
       resumeStatus: 'generating',
       resumeError: null,
     })
+
+    if (backendRef.current === 'chrome-prompt') {
+      const result = await runResume(
+        job,
+        undefined,
+        session.resumeMarkdown ?? undefined,
+        session.resumeSummary ?? undefined,
+        comment.trim() || undefined,
+        session.qnaHistory,
+      )
+      if (result.ok) {
+        updateSessionAndRender(tabId, {
+          resumeMarkdown: result.markdown,
+          resumeSummary: result.summary,
+          resumeStatus: 'done',
+        })
+        await persistSession(tabId)
+      } else {
+        updateSessionAndRender(tabId, { resumeError: result.error, resumeStatus: 'error' })
+      }
+      return
+    }
 
     try {
       const response = await chrome.runtime.sendMessage({

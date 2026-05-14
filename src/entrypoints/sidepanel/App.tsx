@@ -1,4 +1,4 @@
-import { Briefcase, FileText, History, RefreshCw, Search, Settings, Square, User, Zap } from 'lucide-react'
+import { Briefcase, Cpu, Download, FileText, History, RefreshCw, Search, Settings, Square, User, Zap } from 'lucide-react'
 import { useCallback, useState } from 'react'
 
 import { AnalysisReport } from '@/components/AnalysisReport'
@@ -11,6 +11,7 @@ import { SettingsForm } from '@/components/SettingsForm'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { useActiveTab } from '@/hooks/useActiveTab'
+import { useChromeAiStatus } from '@/hooks/useChromeAiStatus'
 import { useProfile } from '@/hooks/useProfile'
 import { useTabSessions } from '@/hooks/useTabSessions'
 import { saveAnalysis } from '@/lib/db'
@@ -30,16 +31,20 @@ export default function App() {
   const {
     profile,
     llmConfig,
-    customPrompt,
+    customPromptCloud,
+    customPromptChrome,
+    activeCustomPrompt,
     loading: profileLoading,
     isProfileComplete,
     isLLMConfigured,
     updateProfile,
     updateLLMConfig,
-    updateCustomPrompt,
+    updateCustomPromptCloud,
+    updateCustomPromptChrome,
   } = useProfile()
 
   const { activeTabId, onTabRemoved } = useActiveTab()
+  const chromeAi = useChromeAiStatus()
 
   const {
     view: tabView,
@@ -67,7 +72,7 @@ export default function App() {
     setResumeMarkdown,
     resetResume,
     invalidateHydration,
-  } = useTabSessions(activeTabId, onTabRemoved)
+  } = useTabSessions(activeTabId, onTabRemoved, llmConfig)
 
   const handleRestore = useCallback((jobId: string) => {
     invalidateHydration(jobId)
@@ -119,9 +124,11 @@ export default function App() {
     return (
       <SettingsForm
         llmConfig={llmConfig}
-        customPrompt={customPrompt}
+        customPromptCloud={customPromptCloud}
+        customPromptChrome={customPromptChrome}
         onSaveLLM={updateLLMConfig}
-        onSavePrompt={updateCustomPrompt}
+        onSavePromptCloud={updateCustomPromptCloud}
+        onSavePromptChrome={updateCustomPromptChrome}
         onBack={() => setGlobalView(null)}
       />
     )
@@ -164,7 +171,9 @@ export default function App() {
   // --- Main view ---
 
   const isWorking = status === 'extracting' || status === 'analyzing'
-  const canAnalyze = isProfileComplete && isLLMConfigured
+  const usingChrome = llmConfig.backend === 'chrome-prompt'
+  const chromeBlocked = usingChrome && chromeAi.status !== 'available'
+  const canAnalyze = isProfileComplete && isLLMConfigured && !chromeBlocked
   const showSetupHints = !isProfileComplete || !isLLMConfigured
 
   return (
@@ -223,6 +232,46 @@ export default function App() {
                 Configure LLM API key
               </button>
             )}
+          </div>
+        )}
+
+        {/* Chrome AI status banner — only when Chrome backend is selected and not ready */}
+        {usingChrome && chromeAi.status === 'downloadable' && (
+          <div className="border rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium">
+              <Cpu className="size-3 text-primary" />
+              Gemini Nano not downloaded
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Chrome's on-device model needs to download first (~4 GB).
+            </p>
+            <Button size="sm" variant="outline" onClick={chromeAi.startDownload} className="cursor-pointer h-7 text-[11px]">
+              <Download className="size-3" />
+              Download model
+            </Button>
+          </div>
+        )}
+        {usingChrome && chromeAi.status === 'downloading' && (
+          <div className="border rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium">
+              <Spinner className="size-3" />
+              Downloading Gemini Nano
+              {typeof chromeAi.downloadProgress === 'number'
+                ? ` (${Math.round(chromeAi.downloadProgress * 100)}%)`
+                : '...'}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Analysis is paused until the download finishes. You can keep this tab open.
+            </p>
+          </div>
+        )}
+        {usingChrome && chromeAi.status === 'unavailable' && (
+          <div className="border border-destructive/50 rounded-lg p-3 bg-destructive/5 space-y-1">
+            <p className="text-xs font-medium text-destructive">Chrome built-in AI is not available</p>
+            <p className="text-[11px] text-muted-foreground">
+              Switch backend to Cloud, or enable the Prompt API at{' '}
+              <code className="text-[10px]">chrome://flags/#prompt-api-for-gemini-nano</code>.
+            </p>
           </div>
         )}
 
@@ -335,6 +384,9 @@ export default function App() {
           qnaHistory={qnaHistory}
           chatLoading={chatLoading}
           currentTabId={activeTabId!}
+          useChromeBackend={usingChrome}
+          profile={profile}
+          customPrompt={activeCustomPrompt}
           onAppendChat={appendChatTurns}
           onSetChatLoading={setChatLoading}
           onBumpChatNonce={bumpChatNonce}

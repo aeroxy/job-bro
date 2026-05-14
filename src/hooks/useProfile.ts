@@ -7,18 +7,23 @@ import { DEFAULT_PREFERENCES } from '@/types/profile'
 export function useProfile() {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null)
-  const [customPrompt, setCustomPromptState] = useState('')
+  const [customPromptCloud, setCustomPromptCloud] = useState('')
+  const [customPromptChrome, setCustomPromptChrome] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    Promise.all([getProfile(), getLLMConfig(), getCustomPrompt()]).then(
-      ([p, c, cp]) => {
-        setProfile(p)
-        setLlmConfig(c)
-        setCustomPromptState(cp)
-        setLoading(false)
-      }
-    )
+    Promise.all([
+      getProfile(),
+      getLLMConfig(),
+      getCustomPrompt('openai'),
+      getCustomPrompt('chrome-prompt'),
+    ]).then(([p, c, cpCloud, cpChrome]) => {
+      setProfile(p)
+      setLlmConfig(c)
+      setCustomPromptCloud(cpCloud)
+      setCustomPromptChrome(cpChrome)
+      setLoading(false)
+    })
   }, [])
 
   const updateProfile = useCallback(async (p: UserProfile) => {
@@ -31,13 +36,28 @@ export function useProfile() {
     setLlmConfig(c)
   }, [])
 
-  const updateCustomPrompt = useCallback(async (prompt: string) => {
-    await saveCustomPrompt(prompt)
-    setCustomPromptState(prompt)
+  const updateCustomPromptCloud = useCallback(async (prompt: string) => {
+    await saveCustomPrompt(prompt, 'openai')
+    setCustomPromptCloud(prompt)
+  }, [])
+
+  const updateCustomPromptChrome = useCallback(async (prompt: string) => {
+    await saveCustomPrompt(prompt, 'chrome-prompt')
+    setCustomPromptChrome(prompt)
   }, [])
 
   const isProfileComplete = profile !== null && !!profile.resume.trim()
-  const isLLMConfigured = llmConfig !== null && !!llmConfig.base_url.trim() && !!llmConfig.model.trim()
+  const isLLMConfigured =
+    llmConfig !== null &&
+    (llmConfig.backend === 'chrome-prompt'
+      ? true  // availability is checked at run time via useChromeAiStatus
+      : !!llmConfig.base_url.trim() && !!llmConfig.model.trim())
+
+  // Active prompt for the currently-selected backend — what evaluators / chat
+  // will actually use. Components that just need "the right prompt" should
+  // read this rather than the per-backend fields.
+  const activeBackend = llmConfig?.backend ?? 'openai'
+  const activeCustomPrompt = activeBackend === 'chrome-prompt' ? customPromptChrome : customPromptCloud
 
   return {
     profile: profile ?? {
@@ -47,12 +67,15 @@ export function useProfile() {
       preferences: DEFAULT_PREFERENCES,
     },
     llmConfig: llmConfig ?? { base_url: '', model: '' },
-    customPrompt,
+    customPromptCloud,
+    customPromptChrome,
+    activeCustomPrompt,
     loading,
     isProfileComplete,
     isLLMConfigured,
     updateProfile,
     updateLLMConfig,
-    updateCustomPrompt,
+    updateCustomPromptCloud,
+    updateCustomPromptChrome,
   }
 }

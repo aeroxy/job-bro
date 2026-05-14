@@ -27,20 +27,32 @@ job-bro/
 
 ## Process Model
 
+The orchestrator (`src/lib/llm-handlers.ts`) is pure TS and runs in **either** the background worker or the sidepanel window — chosen per request by `LLMConfig.backend`.
+
 ```
 User → LinkedIn Job Page
          │
          ▼ (content script — DOM parsing)
     ExtractedJob
          │
-         ▼ (chrome.runtime.sendMessage)
+         ▼ (chrome.runtime.sendMessage REQUEST_EXTRACTION)
     Background Service Worker
          │
-         ▼ (Promise.all)
-    5 Parallel LLM Evaluators
-         │ (ANALYSIS_PROGRESS messages)
-         ▼
-    Sidepanel — live progress updates
+         ▼ (returns ExtractedJob to sidepanel)
+    Sidepanel decides where to run analysis based on config.backend:
+
+  ─── backend === 'openai' ────────────────────────
+    Sidepanel → ANALYZE_JD → Background
+    Background runs llm-handlers.runAnalysis (Promise.all)
+    5 evaluators → HTTP fetch → cloud LLM
+    ANALYSIS_PROGRESS messages stream back to sidepanel
+    Background → ANALYSIS_RESULT → sidepanel
+
+  ─── backend === 'chrome-prompt' ─────────────────
+    Sidepanel calls llm-handlers.runAnalysis directly
+    5 evaluators → chatCompletion → chatCompletionChrome
+                → LanguageModel.create / .prompt (Gemini Nano)
+    Progress callback updates sidepanel state in-process
          │
          ▼ (aggregator)
     AggregatedReport → saved to IndexedDB
@@ -48,6 +60,8 @@ User → LinkedIn Job Page
          ▼
     User views report / generates resume / browses history
 ```
+
+Resume generation and chat Q&A use the same backend dispatch (sidepanel-local for Chrome, background message for cloud). Chat additionally uses a stateful Chrome session via `useChromeChatSession` to avoid re-encoding conversation history on each turn.
 
 ## IPC Message Flow
 

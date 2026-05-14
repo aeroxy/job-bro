@@ -13,6 +13,7 @@ import { useMemo } from 'react'
 import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
+import type { UserProfile } from '@/types/profile'
 import type { EvaluatorProgress } from '@/hooks/useTabSessions'
 import { formatAnalysisContext } from '@/lib/analysis-context'
 import { jobToMarkdown } from '@/extractor/markdown'
@@ -29,13 +30,16 @@ interface AnalysisReportProps {
   qnaHistory?: ChatTurn[]
   chatLoading?: boolean
   currentTabId?: number
+  useChromeBackend?: boolean
+  profile?: UserProfile
+  customPrompt?: string
   onAppendChat?: (turns: ChatTurn[], targetTabId: number, nonce?: number) => void
   onSetChatLoading?: (tabId: number, loading: boolean, nonce?: number) => void
   onBumpChatNonce?: (tabId: number) => number
   onDeleteChatTurn?: (index: number) => void
 }
 
-export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, chatLoading, currentTabId, onAppendChat, onSetChatLoading, onBumpChatNonce, onDeleteChatTurn }: AnalysisReportProps) {
+export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, chatLoading, currentTabId, useChromeBackend, profile, customPrompt, onAppendChat, onSetChatLoading, onBumpChatNonce, onDeleteChatTurn }: AnalysisReportProps) {
   const jobMarkdown = useMemo(() => (job ? jobToMarkdown(job) : ''), [job])
   const analysisContext = useMemo(() => (report ? formatAnalysisContext(report) : ''), [report])
 
@@ -175,6 +179,9 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           history={qnaHistory}
           loading={chatLoading}
           currentTabId={currentTabId}
+          useChromeBackend={useChromeBackend}
+          profile={profile}
+          customPrompt={customPrompt}
           onAppend={onAppendChat}
           onSetLoading={onSetChatLoading}
           onBumpNonce={onBumpChatNonce}

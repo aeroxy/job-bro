@@ -14,9 +14,12 @@ export interface JobPreferences {
   years_of_experience: number
 }
 
+export type LLMBackend = 'openai' | 'chrome-prompt'
+
 export interface LLMConfig {
-  base_url: string
-  model: string
+  backend?: LLMBackend    // default: 'openai' (back-compat for existing configs)
+  base_url: string        // openai backend only
+  model: string           // openai backend only
   api_key?: string
   custom_headers?: string // JSON string of key-value pairs, e.g. '{"X-API-Key": "abc"}'
   stream_mode?: boolean
