@@ -253,48 +253,51 @@ export function useTabSessions(
     }
   }, [updateSessionAndRender])
 
-  const analyze = useCallback(async (extractedJob: ExtractedJob) => {
-    const tabId = activeTabIdRef.current
-    if (!tabId) return null
+  // In-sidepanel analysis dispatch for the Chrome backend. Owns the local
+  // AbortController, streams evaluator-progress updates straight into the
+  // session map (no chrome.runtime round-trip), and persists on success.
+  const runLocalAnalysis = useCallback(async (
+    tabId: number,
+    extractedJob: ExtractedJob,
+  ): Promise<AggregatedReport | null> => {
+    localControllersRef.current.get(tabId)?.abort()
+    const controller = new AbortController()
+    localControllersRef.current.set(tabId, controller)
 
-    cancelledRef.current.delete(tabId)
-    updateSessionAndRender(tabId, {
-      status: 'analyzing',
-      error: null,
-      report: null,
-      progress: { ...INITIAL_PROGRESS },
-    })
-
-    if (backendRef.current === 'chrome-prompt') {
-      // In-sidepanel execution path. Spin up a local AbortController; cancel via stop().
-      localControllersRef.current.get(tabId)?.abort()
-      const controller = new AbortController()
-      localControllersRef.current.set(tabId, controller)
-      try {
-        const result = await runAnalysis(extractedJob, controller.signal, (evaluator, status) => {
-          const session = sessionsRef.current.get(tabId)
-          if (!session) return
-          const newProgress = { ...session.progress, [evaluator]: status }
-          sessionsRef.current.set(tabId, { ...session, progress: newProgress })
-          if (tabId === activeTabIdRef.current) rerender()
-        })
-        if (cancelledRef.current.has(tabId)) return null
-        if (result.ok) {
-          updateSessionAndRender(tabId, { report: result.report, status: 'done' })
-          await persistSession(tabId)
-          return result.report
-        }
-        updateSessionAndRender(tabId, { error: result.error, status: 'error' })
-        return null
-      } catch (e) {
-        if (cancelledRef.current.has(tabId)) return null
-        updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
-        return null
-      } finally {
-        localControllersRef.current.delete(tabId)
-      }
+    const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
+      const session = sessionsRef.current.get(tabId)
+      if (!session) return
+      const newProgress = { ...session.progress, [evaluator]: status }
+      sessionsRef.current.set(tabId, { ...session, progress: newProgress })
+      if (tabId === activeTabIdRef.current) rerender()
     }
 
+    try {
+      const result = await runAnalysis(extractedJob, controller.signal, onProgress)
+      if (cancelledRef.current.has(tabId)) return null
+      if (result.ok) {
+        updateSessionAndRender(tabId, { report: result.report, status: 'done' })
+        await persistSession(tabId)
+        return result.report
+      }
+      updateSessionAndRender(tabId, { error: result.error, status: 'error' })
+      return null
+    } catch (e) {
+      if (cancelledRef.current.has(tabId)) return null
+      updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
+      return null
+    } finally {
+      localControllersRef.current.delete(tabId)
+    }
+  }, [updateSessionAndRender, persistSession, rerender])
+
+  // Background-worker analysis dispatch for the cloud (HTTP) backend. The
+  // worker fans out evaluators in parallel and broadcasts ANALYSIS_PROGRESS
+  // messages, which a separate effect (above) folds into the session state.
+  const runRemoteAnalysis = useCallback(async (
+    tabId: number,
+    extractedJob: ExtractedJob,
+  ): Promise<AggregatedReport | null> => {
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'ANALYZE_JD',
@@ -308,16 +311,32 @@ export function useTabSessions(
         updateSessionAndRender(tabId, { report: response.payload, status: 'done' })
         await persistSession(tabId)
         return response.payload as AggregatedReport
-      } else {
-        updateSessionAndRender(tabId, { error: response.error || 'Analysis failed', status: 'error' })
-        return null
       }
+      updateSessionAndRender(tabId, { error: response.error || 'Analysis failed', status: 'error' })
+      return null
     } catch (e) {
       if (cancelledRef.current.has(tabId)) return null
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
       return null
     }
-  }, [updateSessionAndRender, persistSession, rerender])
+  }, [updateSessionAndRender, persistSession])
+
+  const analyze = useCallback(async (extractedJob: ExtractedJob) => {
+    const tabId = activeTabIdRef.current
+    if (!tabId) return null
+
+    cancelledRef.current.delete(tabId)
+    updateSessionAndRender(tabId, {
+      status: 'analyzing',
+      error: null,
+      report: null,
+      progress: { ...INITIAL_PROGRESS },
+    })
+
+    return backendRef.current === 'chrome-prompt'
+      ? runLocalAnalysis(tabId, extractedJob)
+      : runRemoteAnalysis(tabId, extractedJob)
+  }, [updateSessionAndRender, runLocalAnalysis, runRemoteAnalysis])
 
   const stop = useCallback(() => {
     const tabId = activeTabIdRef.current
