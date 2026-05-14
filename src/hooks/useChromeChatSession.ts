@@ -11,18 +11,40 @@ import type { ChatTurn } from '@/types/chat'
 interface CachedSession {
   session: ChromeAiSession
   systemPrompt: string
-  // Number of conversation turns that this session "knows" (counts both user
-  // and assistant entries). Compared against `history.length` on each ask to
-  // decide whether to reuse or rebuild.
-  knownLength: number
+  // Snapshot of what we expect the caller's history to look like when the
+  // NEXT askChrome arrives. Compared on entry — if either field disagrees
+  // with the incoming history, we rebuild.
+  //
+  // Why both length AND the last answer's content?
+  //  - length catches drops: caller appended fewer turns than we produced
+  //    (stale-nonce filter in ReportChat, unmount before append, manual
+  //    delete that races with completion, etc.).
+  //  - lastAnswer catches silent replacement: caller appended a different
+  //    assistant content than what session.prompt() returned (e.g. user
+  //    edits, error sentinel, empty placeholder).
+  //
+  // The session itself committed `question` and `answer` internally, so
+  // reusing it when the UI shows different turns would have the model
+  // reasoning from a history the user can't see — confusing and wrong.
+  // null on a freshly-created session means "no turns produced yet, only
+  // the seeded history needs to match".
+  expectedNextLength: number
+  lastAnswer: string | null
+}
+
+function tailMatches(cached: CachedSession, history: ChatTurn[]): boolean {
+  if (cached.expectedNextLength !== history.length) return false
+  if (cached.lastAnswer === null) return true  // no turns produced through this session yet
+  const last = history.at(-1)
+  return last?.role === 'assistant' && last.content === cached.lastAnswer
 }
 
 // Stateful per-conversation Chrome AI session. The session is created lazily on
 // the first ask and reused across turns — Chrome's API is inherently stateful,
 // so we save the cost of re-sending the conversation each turn. The session is
 // rebuilt automatically when the system prompt changes (new job, new analysis)
-// or when the history length doesn't match what the session has been told (e.g.
-// after a retry that drops the last assistant turn).
+// or when the incoming history's tail diverges from what we expected — see
+// `CachedSession` and `tailMatches`.
 //
 // Concurrency: askChrome calls are serialized by a per-hook promise-chain lock
 // so the cache-check / create / prompt critical section runs atomically. Without
@@ -75,7 +97,7 @@ export function useChromeChatSession() {
         const needsRebuild =
           !cached ||
           cached.systemPrompt !== systemPrompt ||
-          cached.knownLength !== history.length
+          !tailMatches(cached, history)
 
         if (needsRebuild) {
           cached?.session.destroy()
@@ -92,7 +114,7 @@ export function useChromeChatSession() {
             expectedOutputs: DEFAULT_EXPECTED_IO,
             monitor: chromeDownloadMonitor(),
           })
-          cached = { session, systemPrompt, knownLength: history.length }
+          cached = { session, systemPrompt, expectedNextLength: history.length, lastAnswer: null }
           cacheRef.current = cached
         }
 
@@ -115,7 +137,13 @@ export function useChromeChatSession() {
           throw new Error('Chrome AI returned an empty response (likely a safety filter or internal error)')
         }
 
-        cached!.knownLength += 2  // user question + the just-produced assistant answer
+        // Record what we expect history to look like on the next call. The
+        // length assumes the caller appends both turns (the standard contract);
+        // lastAnswer lets us catch the case where they appended something
+        // different (or nothing) without us knowing — tailMatches will reject
+        // and force a rebuild on the next call.
+        cached!.expectedNextLength = history.length + 2
+        cached!.lastAnswer = answer
         return answer
       })
     } finally {
