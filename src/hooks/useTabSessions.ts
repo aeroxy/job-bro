@@ -213,18 +213,17 @@ export function useTabSessions(
       if (message.type === 'ANALYSIS_PROGRESS') {
         const { tabId, evaluator, status: evalStatus } = message.payload
         const session = sessionsRef.current.get(tabId)
-        if (session) {
-          const newProgress = { ...session.progress, [evaluator]: evalStatus }
-          sessionsRef.current.set(tabId, { ...session, progress: newProgress })
-          if (tabId === activeTabIdRef.current) {
-            rerender()
-          }
-        }
+        // Skip if no session exists — don't spawn a default one for a stale
+        // progress message. updateSessionAndRender would auto-create otherwise.
+        if (!session) return
+        updateSessionAndRender(tabId, {
+          progress: { ...session.progress, [evaluator]: evalStatus },
+        })
       }
     }
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
-  }, [rerender])
+  }, [updateSessionAndRender])
 
   const extract = useCallback(async () => {
     const tabId = activeTabIdRef.current
@@ -266,10 +265,13 @@ export function useTabSessions(
 
     const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
       const session = sessionsRef.current.get(tabId)
+      // Skip if no session exists — don't spawn a default one for a late
+      // callback (e.g. fired after reset). updateSessionAndRender would
+      // auto-create otherwise.
       if (!session) return
-      const newProgress = { ...session.progress, [evaluator]: status }
-      sessionsRef.current.set(tabId, { ...session, progress: newProgress })
-      if (tabId === activeTabIdRef.current) rerender()
+      updateSessionAndRender(tabId, {
+        progress: { ...session.progress, [evaluator]: status },
+      })
     }
 
     try {
@@ -289,7 +291,7 @@ export function useTabSessions(
     } finally {
       localControllersRef.current.delete(tabId)
     }
-  }, [updateSessionAndRender, persistSession, rerender])
+  }, [updateSessionAndRender, persistSession])
 
   // Background-worker analysis dispatch for the cloud (HTTP) backend. The
   // worker fans out evaluators in parallel and broadcasts ANALYSIS_PROGRESS
