@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 
-import { chromeDownloadMonitor, withChromeAiLock } from '@/lib/chrome-prompt-client'
+import { DEFAULT_EXPECTED_IO, chromeDownloadMonitor, withChromeAiLock } from '@/lib/chrome-prompt-client'
 import type { ChatTurn } from '@/types/chat'
 
 interface CachedSession {
@@ -83,8 +83,8 @@ export function useChromeChatSession() {
             initialPrompts,
             temperature: 0.4,
             topK: 8,
-            expectedInputs: [{ type: 'text', languages: ['en'] }],
-            expectedOutputs: [{ type: 'text', languages: ['en'] }],
+            expectedInputs: DEFAULT_EXPECTED_IO,
+            expectedOutputs: DEFAULT_EXPECTED_IO,
             monitor: chromeDownloadMonitor(),
           })
           cached = { session, systemPrompt, knownLength: history.length }

@@ -52,6 +52,12 @@ export function chromeDownloadMonitor(): NonNullable<ChromeAiCreateOptions['moni
 
 const PERMISSIVE_JSON_SCHEMA = { type: 'object' } as const
 
+// I/O language declaration required by Chrome to silence the "no output
+// language specified" warning and properly attest output safety. Single source
+// of truth — every LanguageModel.create() call in the app should pass these.
+// Update here when adding multi-language support.
+export const DEFAULT_EXPECTED_IO: ChromeAiExpectedIO[] = [{ type: 'text', languages: ['en'] }]
+
 export async function getChromeAiAvailability(): Promise<ChromeAiAvailability> {
   if (typeof globalThis.LanguageModel === 'undefined') return 'unavailable'
   try {
@@ -68,8 +74,8 @@ export async function ensureChromeAiDownloaded(signal?: AbortSignal): Promise<vo
     throw new Error('Chrome built-in AI is not available in this browser.')
   }
   const session = await globalThis.LanguageModel.create({
-    expectedInputs: [{ type: 'text', languages: ['en'] }],
-    expectedOutputs: [{ type: 'text', languages: ['en'] }],
+    expectedInputs: DEFAULT_EXPECTED_IO,
+    expectedOutputs: DEFAULT_EXPECTED_IO,
     monitor: (m) => m.addEventListener('downloadprogress', (e) => {
       progressListeners.forEach((l) => l(e.loaded))
     }),
@@ -122,8 +128,8 @@ async function createSession(
     temperature,
     topK: tempToTopK(temperature),
     signal,
-    expectedInputs: [{ type: 'text', languages: ['en'] }],
-    expectedOutputs: [{ type: 'text', languages: ['en'] }],
+    expectedInputs: DEFAULT_EXPECTED_IO,
+    expectedOutputs: DEFAULT_EXPECTED_IO,
     monitor: (m) => m.addEventListener('downloadprogress', (e) => {
       progressListeners.forEach((l) => l(e.loaded))
     }),
