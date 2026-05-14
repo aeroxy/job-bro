@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
+import { useChromeChatSession } from '@/hooks/useChromeChatSession'
+import { buildChatSystemPrompt } from '@/lib/llm-handlers'
 import type { ChatTurn } from '@/types/chat'
+import type { UserProfile } from '@/types/profile'
 
 interface ReportChatProps {
   jobMarkdown: string
@@ -12,6 +15,11 @@ interface ReportChatProps {
   history: ChatTurn[]
   loading: boolean
   currentTabId: number
+  // When set, dispatch chat directly to Chrome's built-in AI in this window
+  // instead of routing through the background service worker.
+  useChromeBackend?: boolean
+  profile?: UserProfile
+  customPrompt?: string
   onAppend: (turns: ChatTurn[], targetTabId: number, nonce?: number) => void
   onSetLoading: (tabId: number, loading: boolean, nonce?: number) => void
   onBumpNonce: (tabId: number) => number
@@ -24,6 +32,9 @@ export function ReportChat({
   history,
   loading,
   currentTabId,
+  useChromeBackend,
+  profile,
+  customPrompt,
   onAppend,
   onSetLoading,
   onBumpNonce,
@@ -35,6 +46,7 @@ export function ReportChat({
   const bottomRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
   const prevLengthRef = useRef(history.length)
+  const { askChrome } = useChromeChatSession()
 
   useEffect(() => {
     mountedRef.current = true
@@ -52,14 +64,24 @@ export function ReportChat({
   async function sendQuestion(question: string, historyContext: ChatTurn[], tabId: number, nonce: number) {
     setError(null)
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'CHAT_REQUEST',
-        payload: { question, history: historyContext, jobMarkdown, analysisContext },
-      })
-      if (response.type === 'CHAT_RESPONSE') {
-        onAppend([{ role: 'assistant', content: response.payload.answer }], tabId, nonce)
-      } else if (mountedRef.current) {
-        setError(response.error || 'Something went wrong')
+      if (useChromeBackend && profile) {
+        // In-window dispatch via persistent Chrome AI session.
+        const systemParts: string[] = []
+        if (customPrompt?.trim()) systemParts.push(customPrompt.trim())
+        systemParts.push(buildChatSystemPrompt(profile, jobMarkdown, analysisContext))
+        const systemPrompt = systemParts.join('\n\n---\n\n')
+        const answer = await askChrome(systemPrompt, historyContext, question)
+        onAppend([{ role: 'assistant', content: answer }], tabId, nonce)
+      } else {
+        const response = await chrome.runtime.sendMessage({
+          type: 'CHAT_REQUEST',
+          payload: { question, history: historyContext, jobMarkdown, analysisContext },
+        })
+        if (response.type === 'CHAT_RESPONSE') {
+          onAppend([{ role: 'assistant', content: response.payload.answer }], tabId, nonce)
+        } else if (mountedRef.current) {
+          setError(response.error || 'Something went wrong')
+        }
       }
     } catch (e) {
       if (mountedRef.current) setError((e as Error).message)

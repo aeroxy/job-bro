@@ -1,4 +1,5 @@
 
+import { chatCompletionChrome } from './chrome-prompt-client'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
 export interface ChatMessage {
@@ -19,6 +20,14 @@ export async function chatCompletion(
   messages: ChatMessage[],
   options?: { temperature?: number; max_tokens?: number; json_mode?: boolean; signal?: AbortSignal }
 ): Promise<string> {
+  if (config.backend === 'chrome-prompt') {
+    return chatCompletionChrome(messages, {
+      temperature: options?.temperature,
+      json_mode: options?.json_mode,
+      signal: options?.signal,
+    })
+  }
+
   if (config.stream_mode) {
     return streamCompletion(config, messages, options)
   }

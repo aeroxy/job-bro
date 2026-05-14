@@ -42,6 +42,28 @@ Manages iterative resume generation.
 
 ---
 
+### `useChromeAiStatus`
+
+Tracks the availability and download state of Chrome's built-in `LanguageModel`.
+
+**State:** `status` (`unavailable` | `downloadable` | `downloading` | `available`), `downloadProgress` (0..1)
+
+**Methods:** `refresh()` (re-query availability), `startDownload()` (trigger model download via `ensureChromeAiDownloaded`).
+
+Subscribes to `onChromeDownloadProgress` on mount so any session creation in the app forwards progress here.
+
+---
+
+### `useChromeChatSession`
+
+Persistent Chrome AI session for chat Q&A. Used by `ReportChat` when `useChromeBackend` is true.
+
+**Returns:** `{ askChrome(systemPrompt, history, question, signal?), reset() }`
+
+The session is created lazily on the first `askChrome` and **rebuilt** when the system prompt changes (different job/analysis) or when `history.length` doesn't match what the session has been told (e.g. after a Retry that drops the last assistant turn). On unmount the session is destroyed.
+
+---
+
 ### `useHistory`
 
 IndexedDB-backed analysis history sourced from the `sessions` store (sessions with a non-null report), mapped to `AnalysisRecord` shape (`id = job_id`, `createdAt = updatedAt`).
@@ -102,9 +124,9 @@ Form for editing `UserProfile`:
 ### `SettingsForm`
 
 Form for editing `LLMConfig` + custom system prompt:
-- Text: base_url, model
-- Password (show/hide toggle): api_key
-- JSON textarea: custom_headers
+- **Backend selector** — two-card radio: "Cloud (HTTP)" vs "Chrome built-in AI". Chrome card is disabled when `useChromeAiStatus.status === 'unavailable'` and shows a hint about the `chrome://flags/#prompt-api-for-gemini-nano` requirement. When the backend is `chrome-prompt` and the model is `'downloadable'`, a Download button triggers `startDownload`; while `'downloading'`, a progress spinner with percent shows.
+- **Cloud-only fields** (only when backend is `'openai'`): base_url, model, api_key (password show/hide), custom_headers (JSON textarea), request_timeout, stream_timeout
+- **Stream Mode** switch — applies to both backends
 - Large textarea: custom system prompt (prepended to all evaluators)
 
 ---
@@ -154,6 +176,8 @@ Displays verdict text + `score/100`.
 ### `ReportChat`
 
 Follow-up Q&A panel rendered inside `AnalysisReport` (live sessions only, not history).
+
+**Backend dispatch:** Accepts `useChromeBackend`, `profile`, and `customPrompt` props. When `useChromeBackend` is true and `profile` is set, builds the chat system prompt locally via `buildChatSystemPrompt` and dispatches via `useChromeChatSession.askChrome` for an in-window stateful session. Otherwise sends a `CHAT_REQUEST` to the background worker (cloud path).
 
 **Key behaviors:**
 - **Retry button** — shown when the last turn is a dangling user question (no assistant response). Fires immediately with local `retrying` state for instant feedback.

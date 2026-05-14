@@ -2,11 +2,13 @@
 
 ## `llm-client.ts`
 
-OpenAI-compatible fetch-based LLM client.
+LLM dispatcher. Routes to one of two backends based on `LLMConfig.backend`:
+- `'openai'` (default) — OpenAI-compatible HTTP fetch.
+- `'chrome-prompt'` — Chrome's built-in `LanguageModel` API (Gemini Nano), via [`chrome-prompt-client.ts`](#chrome-prompt-clientts).
 
 ### `chatCompletion(config, messages, options)`
 
-Makes a POST to `config.base_url + /chat/completions`.
+If `config.backend === 'chrome-prompt'`, delegates to `chatCompletionChrome`. Otherwise makes a POST to `config.base_url + /chat/completions`.
 
 Options:
 - `json_mode: boolean` — sets `response_format: { type: "json_object" }`
@@ -48,6 +50,37 @@ Calls `chatCompletion`, parses JSON, runs `validate`. On failure, appends the va
 Assembles the `messages` array for a chat completion:
 1. If `customPrompt` is set, prepends it to `internalPrompt` as the system message
 2. Adds user content as final message
+
+---
+
+## `chrome-prompt-client.ts`
+
+Adapter for Chrome's built-in `LanguageModel` API (Gemini Nano). **Window-context only** — calling these functions from the MV3 service worker will throw because `LanguageModel` is not exposed there.
+
+| Export | Purpose |
+|---|---|
+| `chatCompletionChrome(messages, options)` | Same return contract as `chatCompletion`. Folds all `system` messages into a single concatenated initial prompt; sends prior turns via `initialPrompts`; sends the last user message via `session.prompt()`. JSON mode uses Chrome's `responseConstraint`. Streaming uses `promptStreaming()`. Sessions are created and destroyed per call. |
+| `getChromeAiAvailability()` | Wraps `LanguageModel.availability()` with a try/catch — returns `'unavailable'` if the global is missing. |
+| `ensureChromeAiDownloaded(signal?)` | Triggers a one-shot session create to start (or wait on) the model download. Progress events flow through `onChromeDownloadProgress`. |
+| `onChromeDownloadProgress(listener)` | Subscribe to `downloadprogress` events broadcast from any session created via this module or via `chromeDownloadMonitor()`. Returns an unsubscribe fn. |
+| `chromeDownloadMonitor()` | Returns a `monitor` function suitable for `LanguageModel.create({ monitor })`. Use it from any caller (e.g. the persistent chat session hook) so download progress reaches the same shared listeners. |
+
+`max_tokens` has no equivalent in the Chrome API and is silently dropped — long resume generations may truncate.
+
+---
+
+## `llm-handlers.ts`
+
+Shared orchestration callable from either the background service worker (HTTP backend) or the sidepanel window (Chrome backend). Pure functions — no `chrome.runtime` messaging here.
+
+| Export | Returns | Used by |
+|---|---|---|
+| `runAnalysis(job, signal, onProgress?)` | `{ ok: true, report } \| { ok: false, error }` | `background.ts` (cloud), `useTabSessions.analyze` (chrome) |
+| `runResume(job, analysisContext?, previousResume?, previousSummary?, comment?, qnaHistory?)` | `{ ok: true, markdown, summary } \| { ok: false, error }` | `background.ts` (cloud), `useTabSessions.generateResume`/`regenerateResume` (chrome) |
+| `runChat(question, history, jobMarkdown, analysisContext)` | `{ ok: true, answer } \| { ok: false, error }` | `background.ts` (cloud) |
+| `buildChatSystemPrompt(profile, jobMarkdown, analysisContext)` | `string` | `ReportChat` (Chrome chat path uses this with the persistent session hook) |
+
+Each loads `profile`, `llmConfig`, and `customPrompt` from `chrome.storage.local` internally. Cloud backend additionally validates `base_url` + `model`; Chrome backend skips that check.
 
 ---
 

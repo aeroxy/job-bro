@@ -1,10 +1,5 @@
-import { runResumeGenerator } from '@/evaluators/resume'
-import { runAllEvaluators } from '@/evaluators/runner'
-import { chatCompletion } from '@/lib/llm-client'
-import type { ChatMessage as LLMChatMessage } from '@/lib/llm-client'
-import { getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
+import { runAnalysis, runChat, runResume } from '@/lib/llm-handlers'
 import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
-import type { UserProfile } from '@/types/profile'
 
 const analysisControllers = new Map<number, AbortController>()
 
@@ -147,34 +142,16 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
 }
 
 async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal, tabId: number) {
-  const profile = await getProfile()
-  if (!profile) {
-    return { type: 'ANALYSIS_ERROR', error: 'No profile configured. Set up your profile first.' }
-  }
-
-  const config = await getLLMConfig()
-  if (!config || !config.base_url || !config.model) {
-    return { type: 'ANALYSIS_ERROR', error: 'No LLM configured. Set up base URL and model in Settings.' }
-  }
-
-  const customPrompt = await getCustomPrompt()
-
   const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
-    // Broadcast progress to all extension pages (sidebar listens)
     chrome.runtime.sendMessage({
       type: 'ANALYSIS_PROGRESS',
       payload: { tabId, evaluator, status },
-    }).catch(() => {
-      // Ignore - no listeners
-    })
+    }).catch(() => { /* no listeners */ })
   }
 
-  try {
-    const report = await runAllEvaluators(job, profile, config, customPrompt || undefined, onProgress, signal)
-    return { type: 'ANALYSIS_RESULT', payload: report }
-  } catch (e) {
-    return { type: 'ANALYSIS_ERROR', error: (e as Error).message }
-  }
+  const result = await runAnalysis(job, signal, onProgress)
+  if (result.ok) return { type: 'ANALYSIS_RESULT', payload: result.report }
+  return { type: 'ANALYSIS_ERROR', error: result.error }
 }
 
 async function handleChatMessage(
@@ -183,76 +160,9 @@ async function handleChatMessage(
   jobMarkdown: string,
   analysisContext: string
 ): Promise<ChatResponse> {
-  const profile = await getProfile()
-  if (!profile) {
-    return { type: 'CHAT_ERROR', error: 'No profile configured. Set up your profile first.' }
-  }
-
-  const config = await getLLMConfig()
-  if (!config || !config.base_url || !config.model) {
-    return { type: 'CHAT_ERROR', error: 'No LLM configured. Set up base URL and model in Settings.' }
-  }
-
-  const customPrompt = await getCustomPrompt()
-
-  const messages: LLMChatMessage[] = []
-
-  if (customPrompt?.trim()) {
-    messages.push({ role: 'system', content: customPrompt.trim() })
-  }
-
-  messages.push({ role: 'system', content: buildChatSystemPrompt(profile, jobMarkdown, analysisContext) })
-
-  for (const turn of history) {
-    messages.push({ role: turn.role, content: turn.content })
-  }
-
-  messages.push({ role: 'user', content: question })
-
-  try {
-    const answer = await chatCompletion(config, messages, {
-      json_mode: false,
-      max_tokens: 1500,
-      temperature: 0.4,
-    })
-    return { type: 'CHAT_RESPONSE', payload: { answer } }
-  } catch (e) {
-    return { type: 'CHAT_ERROR', error: (e as Error).message }
-  }
-}
-
-function buildChatSystemPrompt(profile: UserProfile, jobMarkdown: string, analysisContext: string): string {
-  const parts: string[] = [
-    `You are an AI career advisor helping a candidate evaluate a job opportunity. You have already analyzed this job posting and produced a detailed report. The candidate is asking follow-up questions.
-
-Answer concisely and directly. Use markdown formatting when helpful (lists, bold, etc). Draw on all available context: the job description, the candidate's profile, and the completed analysis. Avoid markdown tables — the display area is narrow; use bullet lists or plain sentences instead.`,
-    '',
-    `<job_description>\n${jobMarkdown}\n</job_description>`,
-    '',
-    `<candidate_resume>\n${profile.resume.trim()}\n</candidate_resume>`,
-  ]
-
-  if (profile.projects.trim()) {
-    parts.push('', `<candidate_projects>\n${profile.projects.trim()}\n</candidate_projects>`)
-  }
-
-  const prefs = profile.preferences
-  const remoteLabel = prefs.remote_preference === 'no_preference' ? 'No Preference' : prefs.remote_preference
-  const sizeLabel = prefs.company_size_preference === 'no_preference' ? 'No Preference' : prefs.company_size_preference
-
-  parts.push('', `<candidate_preferences>
-Salary expectation: ${profile.salary_expectation.trim() || 'Not specified'}
-Remote preference: ${remoteLabel}
-Location preference: ${prefs.preferred_locations.trim() || 'Not specified'}
-Company size: ${sizeLabel}
-Industries: ${prefs.industries_of_interest.trim() || 'Not specified'}
-Deal breakers: ${prefs.deal_breakers.trim() || 'None specified'}
-Years of experience: ${prefs.years_of_experience}
-</candidate_preferences>`)
-
-  parts.push('', `<analysis_report>\n${analysisContext}\n</analysis_report>`)
-
-  return parts.join('\n')
+  const result = await runChat(question, history, jobMarkdown, analysisContext)
+  if (result.ok) return { type: 'CHAT_RESPONSE', payload: { answer: result.answer } }
+  return { type: 'CHAT_ERROR', error: result.error }
 }
 
 async function handleGenerateResume(
@@ -263,28 +173,7 @@ async function handleGenerateResume(
   comment?: string,
   qnaHistory?: import('@/types/chat').ChatTurn[]
 ): Promise<ResumeResponse> {
-  const profile = await getProfile()
-  if (!profile) {
-    return { type: 'RESUME_ERROR', error: 'No profile configured. Set up your profile first.' }
-  }
-
-  const config = await getLLMConfig()
-  if (!config || !config.base_url || !config.model) {
-    return { type: 'RESUME_ERROR', error: 'No LLM configured. Set up base URL and model in Settings.' }
-  }
-
-  const customPrompt = await getCustomPrompt()
-
-  try {
-    const { jobToMarkdown } = await import('@/extractor/markdown')
-    const jobMarkdown = jobToMarkdown(job)
-    const result = await runResumeGenerator(
-      jobMarkdown, profile, config,
-      customPrompt || undefined,
-      analysisContext, previousResume, previousSummary, comment, qnaHistory
-    )
-    return { type: 'RESUME_RESULT', payload: { markdown: result.resume, summary: result.summary } }
-  } catch (e) {
-    return { type: 'RESUME_ERROR', error: (e as Error).message }
-  }
+  const result = await runResume(job, analysisContext, previousResume, previousSummary, comment, qnaHistory)
+  if (result.ok) return { type: 'RESUME_RESULT', payload: { markdown: result.markdown, summary: result.summary } }
+  return { type: 'RESUME_ERROR', error: result.error }
 }
