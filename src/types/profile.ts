@@ -27,6 +27,13 @@ export interface LLMConfig {
   stream_timeout?: number // per-chunk inactivity timeout in seconds (default 60)
 }
 
+export interface LLMProfile {
+  id: string
+  name: string
+  config: LLMConfig
+  customPrompt: string
+}
+
 export const DEFAULT_PREFERENCES: JobPreferences = {
   remote_preference: 'no_preference',
   preferred_locations: '',

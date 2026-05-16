@@ -29,17 +29,7 @@ export default defineConfig({
     description: 'AI-powered LinkedIn job posting analyzer',
     permissions: ['sidePanel', 'storage', 'activeTab', 'tabs', 'scripting'],
     host_permissions: [
-      '*://www.linkedin.com/*',
-      '*://*.fcapp.run/*',
-      '*://api.openai.com/*',
-      '*://openrouter.ai/*',
-      '*://api.anthropic.com/*',
-      '*://api.groq.com/*',
-      '*://api.mistral.ai/*',
-      '*://generativelanguage.googleapis.com/*',
-      '*://api.cohere.com/*',
-      '*://api.together.xyz/*',
-      '*://api.fireworks.ai/*',
+      '*://*/*',
     ],
     icons: {
       64: 'assets/icon-64.png',

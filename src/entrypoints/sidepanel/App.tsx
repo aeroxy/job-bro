@@ -31,16 +31,18 @@ export default function App() {
   const {
     profile,
     llmConfig,
-    customPromptCloud,
+    llmProfiles,
+    activeProfileId,
     customPromptChrome,
     activeCustomPrompt,
     loading: profileLoading,
     isProfileComplete,
     isLLMConfigured,
     updateProfile,
-    updateLLMConfig,
-    updateCustomPromptCloud,
     updateCustomPromptChrome,
+    saveLLMProfile,
+    deleteLLMProfile,
+    selectLLMProfile,
   } = useProfile()
 
   const { activeTabId, onTabRemoved } = useActiveTab()
@@ -124,10 +126,12 @@ export default function App() {
     return (
       <SettingsForm
         llmConfig={llmConfig}
-        customPromptCloud={customPromptCloud}
+        llmProfiles={llmProfiles}
+        activeProfileId={activeProfileId}
         customPromptChrome={customPromptChrome}
-        onSaveLLM={updateLLMConfig}
-        onSavePromptCloud={updateCustomPromptCloud}
+        onSaveLLMProfile={saveLLMProfile}
+        onDeleteLLMProfile={deleteLLMProfile}
+        onSelectLLMProfile={selectLLMProfile}
         onSavePromptChrome={updateCustomPromptChrome}
         onBack={() => setGlobalView(null)}
       />

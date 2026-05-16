@@ -1,4 +1,4 @@
-import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff } from 'lucide-react'
+import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -8,29 +8,40 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useChromeAiStatus } from '@/hooks/useChromeAiStatus'
-import type { LLMBackend, LLMConfig } from '@/types/profile'
+import type { LLMBackend, LLMConfig, LLMProfile } from '@/types/profile'
 
 interface SettingsFormProps {
   llmConfig: LLMConfig
-  customPromptCloud: string
+  llmProfiles: LLMProfile[]
+  activeProfileId: string | null
   customPromptChrome: string
-  onSaveLLM: (config: LLMConfig) => Promise<void>
-  onSavePromptCloud: (prompt: string) => Promise<void>
+  onSaveLLMProfile: (profile: LLMProfile) => Promise<void>
+  onDeleteLLMProfile: (id: string) => Promise<void>
+  onSelectLLMProfile: (id: string) => Promise<void>
   onSavePromptChrome: (prompt: string) => Promise<void>
   onBack: () => void
 }
 
 export function SettingsForm({
   llmConfig,
-  customPromptCloud,
+  llmProfiles,
+  activeProfileId,
   customPromptChrome,
-  onSaveLLM,
-  onSavePromptCloud,
+  onSaveLLMProfile,
+  onDeleteLLMProfile,
+  onSelectLLMProfile,
   onSavePromptChrome,
   onBack,
 }: SettingsFormProps) {
   const [config, setConfig] = useState<LLMConfig>(llmConfig)
-  const [promptCloud, setPromptCloud] = useState(customPromptCloud)
+  const [profileName, setProfileName] = useState(() => {
+    const active = llmProfiles.find((p) => p.id === activeProfileId) ?? llmProfiles[0]
+    return active?.name ?? ''
+  })
+  const [promptCloud, setPromptCloud] = useState(() => {
+    const active = llmProfiles.find((p) => p.id === activeProfileId) ?? llmProfiles[0]
+    return active?.customPrompt ?? ''
+  })
   const [promptChrome, setPromptChrome] = useState(customPromptChrome)
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -39,22 +50,65 @@ export function SettingsForm({
   const backend: LLMBackend = config.backend ?? 'openai'
   const isChrome = backend === 'chrome-prompt'
 
-  // Chrome backend doesn't need base_url/model — saving is always allowed.
-  // Cloud backend keeps the original requirement.
   const canSave = isChrome
     ? true
     : !!config.base_url.trim() && !!config.model.trim()
 
+  const handleProfileSwitch = (id: string) => {
+    if (id === '__new__') {
+      const newProfile: LLMProfile = {
+        id: crypto.randomUUID(),
+        name: 'New Profile',
+        config: { base_url: '', model: '', backend: 'openai' },
+        customPrompt: '',
+      }
+      setConfig(newProfile.config)
+      setProfileName(newProfile.name)
+      setPromptCloud('')
+      setActiveProfileIdLocal(newProfile.id)
+    } else {
+      const target = llmProfiles.find((p) => p.id === id)
+      if (!target) return
+      setConfig(target.config)
+      setProfileName(target.name)
+      setPromptCloud(target.customPrompt)
+      setActiveProfileIdLocal(target.id)
+    }
+  }
+
+  const [activeProfileIdLocal, setActiveProfileIdLocal] = useState(activeProfileId)
+
   const handleSave = async () => {
     setSaving(true)
+    const profileId = activeProfileIdLocal ?? crypto.randomUUID()
+    const profile: LLMProfile = {
+      id: profileId,
+      name: profileName.trim() || 'Untitled',
+      config,
+      customPrompt: promptCloud,
+    }
     await Promise.all([
-      onSaveLLM(config),
-      onSavePromptCloud(promptCloud),
+      onSaveLLMProfile(profile),
       onSavePromptChrome(promptChrome),
     ])
+    setActiveProfileIdLocal(profile.id)
     setSaving(false)
     onBack()
   }
+
+  const handleDelete = async () => {
+    if (!activeProfileIdLocal || llmProfiles.length <= 1) return
+    const remaining = llmProfiles.filter((p) => p.id !== activeProfileIdLocal)
+    await onDeleteLLMProfile(activeProfileIdLocal)
+    const next = remaining[0]
+    setConfig(next.config)
+    setProfileName(next.name)
+    setPromptCloud(next.customPrompt)
+    setActiveProfileIdLocal(next.id)
+  }
+
+  const currentProfileId = activeProfileIdLocal
+  const isNewProfile = currentProfileId ? !llmProfiles.some((p) => p.id === currentProfileId) : true
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -130,7 +184,51 @@ export function SettingsForm({
 
         {!isChrome && (
           <div>
-            <h3 className="text-xs font-semibold mb-3">Cloud LLM Configuration</h3>
+            <h3 className="text-xs font-semibold mb-3">Cloud LLM Profile</h3>
+
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <select
+                  value={currentProfileId ?? ''}
+                  onChange={(e) => handleProfileSwitch(e.target.value)}
+                  className="flex-1 rounded-md border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
+                >
+                  {llmProfiles.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                  {isNewProfile && currentProfileId && (
+                    <option value={currentProfileId}>{profileName || 'New Profile'}</option>
+                  )}
+                  <option value="__new__">+ New Profile</option>
+                </select>
+                {!isNewProfile && llmProfiles.length > 1 && (
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={handleDelete}
+                    className="cursor-pointer shrink-0 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="size-3" />
+                  </Button>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs">Profile Name</Label>
+                <Input
+                  placeholder="e.g. GPT-4o, Claude, OpenRouter"
+                  value={profileName}
+                  onChange={(e) => setProfileName(e.target.value)}
+                  className="text-xs"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!isChrome && (
+          <div>
+            <h3 className="text-xs font-semibold mb-3">Configuration</h3>
 
             <div className="space-y-3">
               <div className="space-y-1.5">
@@ -283,7 +381,7 @@ export function SettingsForm({
               />
               <p className="text-[10px] text-muted-foreground mt-1">
                 Prepended to every evaluator's system prompt. Add context about your background or evaluation preferences.
-                Saved separately from the Chrome prompt.
+                Saved per profile.
               </p>
             </>
           )}
