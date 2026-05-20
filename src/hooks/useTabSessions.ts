@@ -127,11 +127,11 @@ export function useTabSessions(
     sessionsRef.current.set(tabId, updated)
     
     let shouldRerender = tabId === activeTabIdRef.current
-    const jobId = updated.job?.job_id
+    const jobId = patch.job?.job_id ?? session.job?.job_id
 
     if (jobId) {
       for (const [tId, s] of sessionsRef.current.entries()) {
-        if (tId !== tabId && s.job?.job_id === jobId) {
+        if (tId !== tabId && (s.job?.job_id === jobId || s.hydratedJobId === jobId)) {
           sessionsRef.current.set(tId, { ...s, ...patch })
           if (tId === activeTabIdRef.current) {
             shouldRerender = true
