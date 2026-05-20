@@ -227,11 +227,6 @@ export function useTabSessions(
         return
       }
 
-      if (midRun && opts.fromUrlChange) {
-        // User navigated away from the page we were analyzing — cancel.
-        cancelAnalysis(tabId)
-      }
-
       let tabUrl: string | undefined
       try {
         const tab = await chrome.tabs.get(tabId)
@@ -242,8 +237,14 @@ export function useTabSessions(
 
       const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
 
+      // URL change while mid-run — only cancel if the job actually changed
+      // (e.g. not just tracking params or hash fragment updates).
+      if (midRun && opts.fromUrlChange && current?.hydratedJobId !== jobId) {
+        cancelAnalysis(tabId)
+      }
+
       // Fast path: same job already loaded, nothing to do.
-      if (current && current.hydratedJobId === jobId && !opts.fromUrlChange && !midRun) {
+      if (current && current.hydratedJobId === jobId) {
         return
       }
 
