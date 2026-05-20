@@ -26,6 +26,8 @@ function timeAgo(ts: number): string {
 export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
   const { records, orphanCount, loading, remove, clearAll, prune } = useHistory()
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [confirmingPrune, setConfirmingPrune] = useState(false)
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false)
 
   // Auto-reset confirmation state after 3 seconds of inactivity
   useEffect(() => {
@@ -33,6 +35,18 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
     const timer = setTimeout(() => setConfirmingId(null), 3000)
     return () => clearTimeout(timer)
   }, [confirmingId])
+
+  useEffect(() => {
+    if (!confirmingPrune) return
+    const timer = setTimeout(() => setConfirmingPrune(false), 3000)
+    return () => clearTimeout(timer)
+  }, [confirmingPrune])
+
+  useEffect(() => {
+    if (!confirmingClearAll) return
+    const timer = setTimeout(() => setConfirmingClearAll(false), 3000)
+    return () => clearTimeout(timer)
+  }, [confirmingClearAll])
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -49,28 +63,44 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
             size="sm"
             disabled={orphanCount === 0}
             onClick={async () => {
-              if (!confirm(`Prune ${orphanCount} incomplete session${orphanCount === 1 ? '' : 's'}? Completed analyses are kept.`)) return
-              try {
-                const removed = await prune()
-                alert(removed > 0
-                  ? `Pruned ${removed} incomplete session${removed === 1 ? '' : 's'}.`
-                  : 'Nothing to prune.')
-              } catch (e) {
-                alert(`Prune failed: ${(e as Error).message}`)
+              if (confirmingPrune) {
+                try {
+                  await prune()
+                } catch (e) {
+                  alert(`Prune failed: ${(e as Error).message}`)
+                }
+                setConfirmingPrune(false)
+              } else {
+                setConfirmingPrune(true)
               }
             }}
-            className="text-xs text-muted-foreground hover:text-foreground cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            className={`text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${
+              confirmingPrune
+                ? 'bg-destructive/10 text-destructive hover:text-destructive'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
           >
-            Prune ({orphanCount})
+            {confirmingPrune ? 'Confirm Prune' : `Prune (${orphanCount})`}
           </Button>
           {records.length > 0 && (
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => confirm('Clear all history?') && clearAll()}
-              className="text-xs text-destructive hover:text-destructive cursor-pointer"
+              onClick={() => {
+                if (confirmingClearAll) {
+                  clearAll()
+                  setConfirmingClearAll(false)
+                } else {
+                  setConfirmingClearAll(true)
+                }
+              }}
+              className={`text-xs cursor-pointer transition-all duration-200 ${
+                confirmingClearAll
+                  ? 'bg-destructive/10 text-destructive hover:bg-destructive/20'
+                  : 'text-destructive hover:text-destructive'
+              }`}
             >
-              Clear All
+              {confirmingClearAll ? 'Confirm Clear All' : 'Clear All'}
             </Button>
           )}
         </div>
