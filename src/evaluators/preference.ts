@@ -4,6 +4,7 @@ import type { PreferenceResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
 const PROMPT = `You are a career advisor comparing job preferences vs job posting.
+Identify 'Remote/Onsite' status and 'Employment Type' (e.g., Contract, Full-time) by scanning the full Description text.
 Check remote/onsite, location, company size, industry, deal breakers.
 
 Write the "summary" field as a structured markdown report covering only the candidate's stated preferences:

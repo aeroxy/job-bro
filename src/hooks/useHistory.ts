@@ -72,7 +72,9 @@ export function useHistory() {
     setLoading(true)
     const sessions = await listSessions()
     setRecords(sessions.filter((s) => s.report !== null).map(sessionToRecord))
-    setOrphanCount(sessions.filter((s) => s.report === null).length)
+    setOrphanCount(sessions.filter((s) =>
+      s.report === null && s.status !== 'analyzing' && s.status !== 'extracting'
+    ).length)
     setLoading(false)
   }, [])
 
