@@ -118,6 +118,9 @@ export function useTabSessions(
 
   // Wrapped updateSession that conditionally re-renders. Also propagates
   // updates to other tabs viewing the same jobId so state/progress remains synchronized.
+  // Note: Propagating the entire patch (including UI view states like `view`) is intentional
+  // so that sidepanels viewing the same job remain in sync (e.g. flipping to the resume
+  // view on one tab updates the other tab's sidepanel to match).
   const updateSessionAndRender = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
     const updated = { ...session, ...patch }
@@ -178,8 +181,14 @@ export function useTabSessions(
   //   interrupted, surface an error with retry hint.
   const syncTab = useCallback(async (tabId: number, opts: { fromUrlChange?: boolean } = {}) => {
     // Chain onto any in-flight sync for this tab to prevent races.
+    // Wrap in an IIFE and catch errors on `prev` to prevent any failed sync
+    // task from breaking all future sync updates in the promise chain.
     const prev = syncMutexRef.current.get(tabId) ?? Promise.resolve()
-    const run = prev.then(async () => {
+    const run = (async () => {
+      try {
+        await prev
+      } catch {}
+
       const current = sessionsRef.current.get(tabId)
       const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
 
@@ -277,15 +286,17 @@ export function useTabSessions(
             : null,
         })
       }
-    }).finally(() => {
+    })()
+    
+    const finalRun = run.finally(() => {
       // Garbage-collect the mutex slot once this run is the latest. If another
       // call has chained on after us, leave its `run` in place.
-      if (syncMutexRef.current.get(tabId) === run) {
+      if (syncMutexRef.current.get(tabId) === finalRun) {
         syncMutexRef.current.delete(tabId)
       }
     })
-    syncMutexRef.current.set(tabId, run)
-    return run
+    syncMutexRef.current.set(tabId, finalRun)
+    return finalRun
   }, [updateSessionAndRender, rerender])
 
   // Sync when active tab switches
