@@ -145,6 +145,35 @@ export function useTabSessions(
     }
   }, [rerender])
 
+  // Cancel the in-flight analysis for a tab AND any sibling tabs viewing the
+  // same jobId. Marks all related tabIds in cancelledRef, aborts the local
+  // AbortController (Chrome backend), and sends CANCEL_ANALYSIS to background
+  // (cloud backend). This ensures that clicking "Stop" from a sibling tab
+  // actually reaches the controller keyed under the originating tab's ID.
+  const cancelAnalysis = useCallback((tabId: number) => {
+    const session = sessionsRef.current.get(tabId)
+    const jobId = session?.job?.job_id
+
+    // Always cancel the given tab
+    cancelledRef.current.add(tabId)
+    localControllersRef.current.get(tabId)?.abort()
+    localControllersRef.current.delete(tabId)
+    chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId }).catch(() => {})
+
+    // Also cancel any sibling tabs with the same jobId — one of them may own
+    // the actual running controller.
+    if (jobId) {
+      for (const [tId, s] of sessionsRef.current.entries()) {
+        if (tId !== tabId && s.job?.job_id === jobId) {
+          cancelledRef.current.add(tId)
+          localControllersRef.current.get(tId)?.abort()
+          localControllersRef.current.delete(tId)
+          chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId: tId }).catch(() => {})
+        }
+      }
+    }
+  }, [])
+
   // Persist session to IndexedDB if it has a job_id. Captures the current
   // status + progress so that an interrupted run (sidepanel closed mid-analyze)
   // can be surfaced on rehydrate, instead of silently reverting to 'idle'.
@@ -200,10 +229,7 @@ export function useTabSessions(
 
       if (midRun && opts.fromUrlChange) {
         // User navigated away from the page we were analyzing — cancel.
-        cancelledRef.current.add(tabId)
-        localControllersRef.current.get(tabId)?.abort()
-        localControllersRef.current.delete(tabId)
-        chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId }).catch(() => {})
+        cancelAnalysis(tabId)
       }
 
       let tabUrl: string | undefined
@@ -238,7 +264,7 @@ export function useTabSessions(
 
       // Tab may have navigated again during the IDB read — bail if so.
       const latest = sessionsRef.current.get(tabId)
-      if (latest && latest.status !== 'hydrating') return
+      if (!latest || latest.status !== 'hydrating') return
 
       if (!persisted) {
         updateSessionAndRender(tabId, { hydratedJobId: jobId, status: 'idle' })
@@ -297,7 +323,7 @@ export function useTabSessions(
     })
     syncMutexRef.current.set(tabId, finalRun)
     return finalRun
-  }, [updateSessionAndRender, rerender])
+  }, [cancelAnalysis, updateSessionAndRender, rerender])
 
   // Sync when active tab switches
   useEffect(() => {
@@ -488,12 +514,8 @@ export function useTabSessions(
     const tabId = activeTabIdRef.current
     if (!tabId) return
 
-    cancelledRef.current.add(tabId)
-    // Abort the in-sidepanel run if any (Chrome backend), and notify background
-    // for the HTTP backend. Both are idempotent.
-    localControllersRef.current.get(tabId)?.abort()
-    localControllersRef.current.delete(tabId)
-    chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId }).catch(() => {})
+    // Cancel analysis on this tab and any siblings viewing the same job.
+    cancelAnalysis(tabId)
     updateSessionAndRender(tabId, {
       status: 'idle',
       error: null,
@@ -501,7 +523,7 @@ export function useTabSessions(
     })
     // Persist so a stopped run isn't later mistaken for an interrupted one.
     persistSession(tabId).catch(() => {})
-  }, [updateSessionAndRender, persistSession])
+  }, [cancelAnalysis, updateSessionAndRender, persistSession])
 
   const reset = useCallback(() => {
     const tabId = activeTabIdRef.current
@@ -514,9 +536,7 @@ export function useTabSessions(
     // remains restorable from the History view.
     const jobId = sessionsRef.current.get(tabId)?.job?.job_id
 
-    cancelledRef.current.add(tabId)
-    localControllersRef.current.get(tabId)?.abort()
-    localControllersRef.current.delete(tabId)
+    cancelAnalysis(tabId)
     updateSessionAndRender(tabId, {
       status: 'idle',
       job: null,
@@ -527,7 +547,7 @@ export function useTabSessions(
       hydratedJobId: null,
     })
     if (jobId) deleteSession(jobId).catch(() => {})
-  }, [updateSessionAndRender])
+  }, [cancelAnalysis, updateSessionAndRender])
 
   const deleteChatTurn = useCallback(async (index: number) => {
     const tabId = activeTabIdRef.current
