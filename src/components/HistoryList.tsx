@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
 import { ArrowLeft, Building2, Clock, Trash2, Check } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { VerdictBadge } from './VerdictBadge'
 import { useHistory } from '@/hooks/useHistory'
+import { useAutoResetState } from '@/hooks/useAutoResetState'
 import { Spinner } from '@/components/ui/spinner'
 
 interface HistoryListProps {
@@ -25,28 +25,9 @@ function timeAgo(ts: number): string {
 
 export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
   const { records, orphanCount, loading, remove, clearAll, prune } = useHistory()
-  const [confirmingId, setConfirmingId] = useState<string | null>(null)
-  const [confirmingPrune, setConfirmingPrune] = useState(false)
-  const [confirmingClearAll, setConfirmingClearAll] = useState(false)
-
-  // Auto-reset confirmation state after 3 seconds of inactivity
-  useEffect(() => {
-    if (!confirmingId) return
-    const timer = setTimeout(() => setConfirmingId(null), 3000)
-    return () => clearTimeout(timer)
-  }, [confirmingId])
-
-  useEffect(() => {
-    if (!confirmingPrune) return
-    const timer = setTimeout(() => setConfirmingPrune(false), 3000)
-    return () => clearTimeout(timer)
-  }, [confirmingPrune])
-
-  useEffect(() => {
-    if (!confirmingClearAll) return
-    const timer = setTimeout(() => setConfirmingClearAll(false), 3000)
-    return () => clearTimeout(timer)
-  }, [confirmingClearAll])
+  const [confirmingId, setConfirmingId] = useAutoResetState<string | null>(null)
+  const [confirmingPrune, setConfirmingPrune] = useAutoResetState(false)
+  const [confirmingClearAll, setConfirmingClearAll] = useAutoResetState(false)
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -86,9 +67,13 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
+              onClick={async () => {
                 if (confirmingClearAll) {
-                  clearAll()
+                  try {
+                    await clearAll()
+                  } catch (e) {
+                    alert(`Clear all failed: ${(e as Error).message}`)
+                  }
                   setConfirmingClearAll(false)
                 } else {
                   setConfirmingClearAll(true)
@@ -145,10 +130,14 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
                     />
                     <Button
                       variant="ghost"
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation()
                         if (confirmingId === record.id) {
-                          remove(record.id)
+                          try {
+                            await remove(record.id)
+                          } catch (e) {
+                            alert(`Delete failed: ${(e as Error).message}`)
+                          }
                           setConfirmingId(null)
                         } else {
                           setConfirmingId(record.id)

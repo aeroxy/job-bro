@@ -151,7 +151,7 @@ export async function pruneOrphanSessions(): Promise<number> {
   let count = 0
   let cursor = await store.openCursor()
   while (cursor) {
-    if (cursor.value.report === null) {
+    if (cursor.value.report === null && cursor.value.status !== 'analyzing' && cursor.value.status !== 'extracting') {
       await cursor.delete()
       count++
     }

@@ -5,11 +5,10 @@ export function extractLinkedInJobId(url: string): string | null {
   return m?.[1] ?? null
 }
 
-function isJobPostingPage(): boolean {
+function isJobPostingPage(lazyCol?: Element | null): boolean {
   const url = window.location.href
   const isJobUrl = /linkedin\.com\/jobs\/(view|collections|search)\//.test(url)
-  // LinkedIn now uses data-testid="lazy-column" as the main job detail container
-  const hasJobContent = !!document.querySelector('[data-testid="lazy-column"]')
+  const hasJobContent = lazyCol !== undefined ? !!lazyCol : !!document.querySelector('[data-testid="lazy-column"]')
   return isJobUrl && hasJobContent
 }
 
@@ -80,7 +79,7 @@ function extractDescription(): string {
 
 export function extractJob(): ExtractedJob {
   const lazyCol = document.querySelector('[data-testid="lazy-column"]')
-  if (!isJobPostingPage() || !lazyCol) {
+  if (!isJobPostingPage(lazyCol) || !lazyCol) {
     throw new Error('Not a LinkedIn job posting page')
   }
 

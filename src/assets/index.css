@@ -97,6 +97,14 @@
   }
 }
 
+@keyframes scale-in {
+  from { transform: scale(0.5); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.animate-scale-in {
+  animation: scale-in 0.15s ease-out;
+}
+
 .resume-preview h1 {
   font-size: 1.4em;
   font-weight: 700;

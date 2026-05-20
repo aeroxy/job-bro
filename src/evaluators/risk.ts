@@ -5,7 +5,8 @@ import type { LLMConfig, UserProfile } from '@/types/profile'
 
 const PROMPT = `You are a job posting risk analyst. Identify red flags across these categories (use the "type" field):
 - under_leveling, overqualification
-- vague_jd, toxic_signals, unrealistic_requirements, high_turnover
+- vague_jd, toxic_signals, high_turnover
+- unrealistic_requirements — identify these by scanning the skill list in the description and comparing it against the stated experience level
 - stealth_no_diligence — stealth-mode company with insufficient public info to evaluate technology, team, or financial health
 - seed_stage_comp_risk — seed/pre-seed stage where cash compensation is likely well below candidate's expectation and equity is illiquid
 - founding_role_undisclosed_comp — founding-team title (CTO, founding engineer, etc.) without disclosed cash compensation

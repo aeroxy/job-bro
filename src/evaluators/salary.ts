@@ -4,6 +4,7 @@ import type { SalaryResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
 const PROMPT = `You are a compensation analyst. Estimate salary range and assess alignment with candidate expectations.
+Carefully scan the entire Description for compensation signals (ranges, equity, or currency) as they may be buried in the text.
 
 When comparing candidate expectations to the job's compensation:
 - Convert all figures to the same currency as the job posting before comparing, using your knowledge of approximate exchange rates. State the conversion in your reasoning.
