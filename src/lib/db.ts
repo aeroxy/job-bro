@@ -5,13 +5,24 @@ import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
 
 const DB_NAME = 'job-bro'
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 export interface AnalysisRecord {
   id: string
   job: ExtractedJob
   report: AggregatedReport
   createdAt: number
+}
+
+export type PersistedAnalysisStatus = 'idle' | 'extracting' | 'analyzing' | 'done' | 'error'
+
+export interface PersistedEvaluatorProgress {
+  job_fit: 'pending' | 'running' | 'completed' | 'error'
+  salary: 'pending' | 'running' | 'completed' | 'error'
+  preference: 'pending' | 'running' | 'completed' | 'error'
+  risk: 'pending' | 'running' | 'completed' | 'error'
+  growth: 'pending' | 'running' | 'completed' | 'error'
+  summary: 'pending' | 'running' | 'completed' | 'error'
 }
 
 export interface PersistedSession {
@@ -22,6 +33,8 @@ export interface PersistedSession {
   resumeMarkdown: string | null
   resumeSummary: string | null
   updatedAt: number
+  status?: PersistedAnalysisStatus
+  progress?: PersistedEvaluatorProgress
 }
 
 interface JobBroDB extends DBSchema {
@@ -57,6 +70,8 @@ function getDB() {
           const sessions = db.createObjectStore('sessions', { keyPath: 'job_id' })
           sessions.createIndex('by-updated', 'updatedAt')
         }
+        // v3 adds optional status/progress to PersistedSession — no schema change needed
+        // since IndexedDB stores arbitrary values; the bump just signals upgraders.
       },
     })
   }
@@ -123,4 +138,25 @@ export async function deleteSession(jobId: string): Promise<void> {
 export async function clearSessions(): Promise<void> {
   const db = await getDB()
   await db.clear('sessions')
+}
+
+// Delete sessions that were extracted but never produced a report — analyses
+// that errored out, were cancelled, or where the user only ran extract. These
+// are pure scratch and don't appear in the History view. Returns the number
+// of records deleted.
+export async function pruneOrphanSessions(): Promise<number> {
+  const db = await getDB()
+  const tx = db.transaction('sessions', 'readwrite')
+  const store = tx.objectStore('sessions')
+  let count = 0
+  let cursor = await store.openCursor()
+  while (cursor) {
+    if (cursor.value.report === null) {
+      await cursor.delete()
+      count++
+    }
+    cursor = await cursor.continue()
+  }
+  await tx.done
+  return count
 }

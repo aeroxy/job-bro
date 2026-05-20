@@ -106,6 +106,9 @@ export function useChromeChatSession() {
           for (const turn of history) {
             initialPrompts.push({ role: turn.role, content: turn.content })
           }
+          if (!globalThis.LanguageModel) {
+            throw new Error('Chrome LanguageModel API is not available in this environment')
+          }
           const session = await globalThis.LanguageModel.create({
             initialPrompts,
             temperature: CHAT_TEMPERATURE,

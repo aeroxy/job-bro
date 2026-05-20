@@ -5,11 +5,11 @@ import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
 import type { LLMConfig } from '@/types/profile'
 import type { AnalysisProgressMessage } from '@/types/messages'
-import { getSessionByJobId, saveSession } from '@/lib/db'
+import { deleteSession, getSessionByJobId, saveSession } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
 import { runAnalysis, runResume } from '@/lib/llm-handlers'
 
-export type AnalysisStatus = 'idle' | 'extracting' | 'analyzing' | 'done' | 'error'
+export type AnalysisStatus = 'idle' | 'hydrating' | 'extracting' | 'analyzing' | 'done' | 'error'
 export type ResumeStatus = 'idle' | 'generating' | 'done' | 'error'
 
 export type TabView =
@@ -97,6 +97,10 @@ export function useTabSessions(
   const backendRef = useRef<LLMConfig['backend']>(llmConfig.backend)
   backendRef.current = llmConfig.backend
 
+  // Per-tab mutex: chains concurrent syncTab() calls for the same tab so they
+  // run sequentially, preventing race conditions on session state.
+  const syncMutexRef = useRef(new Map<number, Promise<void>>())
+
   // Helper: get or create a session for a tab
   const getSession = useCallback((tabId: number): TabSession => {
     return sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
@@ -112,16 +116,35 @@ export function useTabSessions(
   const activeTabIdRef = useRef(activeTabId)
   activeTabIdRef.current = activeTabId
 
-  // Wrapped updateSession that conditionally re-renders
+  // Wrapped updateSession that conditionally re-renders. Also propagates
+  // updates to other tabs viewing the same jobId so state/progress remains synchronized.
   const updateSessionAndRender = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
-    sessionsRef.current.set(tabId, { ...session, ...patch })
-    if (tabId === activeTabIdRef.current) {
+    const updated = { ...session, ...patch }
+    sessionsRef.current.set(tabId, updated)
+    
+    let shouldRerender = tabId === activeTabIdRef.current
+    const jobId = updated.job?.job_id
+
+    if (jobId) {
+      for (const [tId, s] of sessionsRef.current.entries()) {
+        if (tId !== tabId && s.job?.job_id === jobId) {
+          sessionsRef.current.set(tId, { ...s, ...patch })
+          if (tId === activeTabIdRef.current) {
+            shouldRerender = true
+          }
+        }
+      }
+    }
+
+    if (shouldRerender) {
       rerender()
     }
   }, [rerender])
 
-  // Persist session to IndexedDB if it has a job_id
+  // Persist session to IndexedDB if it has a job_id. Captures the current
+  // status + progress so that an interrupted run (sidepanel closed mid-analyze)
+  // can be surfaced on rehydrate, instead of silently reverting to 'idle'.
   const persistSession = useCallback(async (tabId: number) => {
     const s = sessionsRef.current.get(tabId)
     if (!s?.job?.job_id) return
@@ -133,75 +156,177 @@ export function useTabSessions(
       resumeMarkdown: s.resumeMarkdown,
       resumeSummary: s.resumeSummary,
       updatedAt: Date.now(),
+      // 'hydrating' is a transient UI state, never useful to persist
+      status: s.status === 'hydrating' ? 'idle' : s.status,
+      progress: s.progress,
     })
   }, [])
 
-  // Hydrate session from IndexedDB when a tab becomes active
-  const hydrateTab = useCallback(async (tabId: number) => {
-    let tabUrl: string | undefined
-    try {
-      const tab = await chrome.tabs.get(tabId)
-      tabUrl = tab.url
-    } catch {
-      return
-    }
-    if (!tabUrl) return
+  // Sync the panel's view of a tab with that tab's current URL. Single entry
+  // point for both tab-switches (onActivated) and URL changes within a tab
+  // (onUpdated / SPA navigation). Eliminates the gap where stale content from
+  // a previous tab is visible while the new tab's state loads.
+  //
+  // Semantics:
+  // - Tab switch (fromUrlChange:false) onto a mid-run tab: do nothing — the
+  //   in-flight analyzer is the source of truth, show its spinner.
+  // - URL change (fromUrlChange:true) while mid-run: cancel the in-flight run,
+  //   then resync with the new URL.
+  // - Non-LinkedIn URL: reset to idle empty state (no stale content).
+  // - LinkedIn job URL: synchronous reset to 'hydrating', then async IDB load.
+  // - IDB record with persisted status='analyzing'/'extracting': treat as
+  //   interrupted, surface an error with retry hint.
+  const syncTab = useCallback(async (tabId: number, opts: { fromUrlChange?: boolean } = {}) => {
+    // Chain onto any in-flight sync for this tab to prevent races.
+    const prev = syncMutexRef.current.get(tabId) ?? Promise.resolve()
+    const run = prev.then(async () => {
+      const current = sessionsRef.current.get(tabId)
+      const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
 
-    const jobId = extractLinkedInJobId(tabUrl)
-    if (!jobId) return
+      if (midRun && !opts.fromUrlChange) {
+        // Tab switch onto a mid-run tab — leave session as-is. The active-tab
+        // re-render is driven by activeTabId changing, no setTick needed.
+        return
+      }
 
-    const existing = sessionsRef.current.get(tabId)
-    // Skip if already hydrated from same job
-    if (existing?.hydratedJobId === jobId) return
+      if (midRun && opts.fromUrlChange) {
+        // User navigated away from the page we were analyzing — cancel.
+        cancelledRef.current.add(tabId)
+        localControllersRef.current.get(tabId)?.abort()
+        localControllersRef.current.delete(tabId)
+        chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId }).catch(() => {})
+      }
 
-    const persisted = await getSessionByJobId(jobId)
-    if (!persisted) {
-      // Mark that we checked so we don't re-query on every render
-      updateSessionAndRender(tabId, { hydratedJobId: jobId })
-      return
-    }
+      let tabUrl: string | undefined
+      try {
+        const tab = await chrome.tabs.get(tabId)
+        tabUrl = tab.url
+      } catch {
+        return // tab closed during the await
+      }
 
-    updateSessionAndRender(tabId, {
-      hydratedJobId: jobId,
-      job: persisted.job,
-      report: persisted.report,
-      qnaHistory: persisted.qnaHistory,
-      resumeMarkdown: persisted.resumeMarkdown,
-      resumeSummary: persisted.resumeSummary,
-      resumeStatus: persisted.resumeMarkdown ? 'done' : 'idle',
-      status: persisted.report ? 'done' : 'idle',
-      progress: persisted.report ? { ...COMPLETED_PROGRESS } : { ...INITIAL_PROGRESS },
+      const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
+
+      // Fast path: same job already loaded, nothing to do.
+      if (current && current.hydratedJobId === jobId && !opts.fromUrlChange && !midRun) {
+        return
+      }
+
+      // Synchronous reset before async IDB fetch — kills stale content immediately.
+      sessionsRef.current.set(tabId, {
+        ...DEFAULT_SESSION,
+        progress: { ...INITIAL_PROGRESS },
+        status: jobId ? 'hydrating' : 'idle',
+      })
+      if (tabId === activeTabIdRef.current) rerender()
+
+      if (!jobId) {
+        updateSessionAndRender(tabId, { hydratedJobId: null })
+        return
+      }
+
+      const persisted = await getSessionByJobId(jobId)
+
+      // Tab may have navigated again during the IDB read — bail if so.
+      const latest = sessionsRef.current.get(tabId)
+      if (latest && latest.status !== 'hydrating') return
+
+      if (!persisted) {
+        updateSessionAndRender(tabId, { hydratedJobId: jobId, status: 'idle' })
+        return
+      }
+
+      // Check if another tab is actively running this analysis right now
+      const activeSiblingSession = Array.from(sessionsRef.current.entries()).find(
+        ([tId, s]) =>
+          tId !== tabId &&
+          s.job?.job_id === jobId &&
+          (s.status === 'analyzing' || s.status === 'extracting')
+      )?.[1]
+
+      const wasInterrupted =
+        !activeSiblingSession &&
+        (persisted.status === 'analyzing' || persisted.status === 'extracting')
+
+      if (activeSiblingSession) {
+        updateSessionAndRender(tabId, {
+          hydratedJobId: jobId,
+          job: activeSiblingSession.job,
+          report: activeSiblingSession.report,
+          qnaHistory: activeSiblingSession.qnaHistory,
+          resumeMarkdown: activeSiblingSession.resumeMarkdown,
+          resumeSummary: activeSiblingSession.resumeSummary,
+          resumeStatus: activeSiblingSession.resumeStatus,
+          status: activeSiblingSession.status,
+          progress: activeSiblingSession.progress,
+          error: activeSiblingSession.error,
+        })
+      } else {
+        updateSessionAndRender(tabId, {
+          hydratedJobId: jobId,
+          job: persisted.job,
+          report: persisted.report,
+          qnaHistory: persisted.qnaHistory,
+          resumeMarkdown: persisted.resumeMarkdown,
+          resumeSummary: persisted.resumeSummary,
+          resumeStatus: persisted.resumeMarkdown ? 'done' : 'idle',
+          status: wasInterrupted ? 'error' : persisted.report ? 'done' : 'idle',
+          progress: persisted.report ? { ...COMPLETED_PROGRESS } : { ...INITIAL_PROGRESS },
+          error: wasInterrupted
+            ? 'Previous analysis was interrupted. Click Analyze to retry.'
+            : null,
+        })
+      }
+    }).finally(() => {
+      // Garbage-collect the mutex slot once this run is the latest. If another
+      // call has chained on after us, leave its `run` in place.
+      if (syncMutexRef.current.get(tabId) === run) {
+        syncMutexRef.current.delete(tabId)
+      }
     })
-  }, [updateSessionAndRender])
+    syncMutexRef.current.set(tabId, run)
+    return run
+  }, [updateSessionAndRender, rerender])
 
-  // Re-render when active tab switches (to show that tab's session)
+  // Sync when active tab switches
   useEffect(() => {
-    rerender()
-    if (activeTabId) {
-      hydrateTab(activeTabId)
-    }
-  }, [activeTabId, rerender, hydrateTab])
+    if (activeTabId) syncTab(activeTabId)
+  }, [activeTabId, syncTab])
 
-  // Listen for URL changes in active tab (user navigates between job postings)
+  // Sync when the active tab's URL changes (address bar, link click, SPA pushState).
+  // Re-syncs regardless of whether the new URL is a LinkedIn job page — navigating
+  // *off* LinkedIn must clear the panel, not leave the old analysis visible.
   useEffect(() => {
     const handleUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
       if (tabId !== activeTabIdRef.current) return
       if (!changeInfo.url) return
-      const session = sessionsRef.current.get(tabId)
-      const newJobId = extractLinkedInJobId(changeInfo.url)
-      if (newJobId && newJobId !== session?.hydratedJobId) {
-        hydrateTab(tabId)
-      }
+      syncTab(tabId, { fromUrlChange: true })
     }
     chrome.tabs.onUpdated.addListener(handleUpdated)
     return () => chrome.tabs.onUpdated.removeListener(handleUpdated)
-  }, [hydrateTab])
+  }, [syncTab])
+
+  // Content script broadcasts URL_CHANGED on LinkedIn SPA navigation (history.pushState),
+  // which chrome.tabs.onUpdated may miss. Same handler, treat as URL change.
+  useEffect(() => {
+    const listener = (message: { type?: string }, sender: chrome.runtime.MessageSender) => {
+      if (message?.type !== 'URL_CHANGED') return
+      const tabId = sender.tab?.id
+      if (tabId == null || tabId !== activeTabIdRef.current) return
+      syncTab(tabId, { fromUrlChange: true })
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [syncTab])
 
   // Clean up sessions when tabs are closed
   useEffect(() => {
     const handleRemoved = (tabId: number) => {
       sessionsRef.current.delete(tabId)
       cancelledRef.current.delete(tabId)
+      localControllersRef.current.get(tabId)?.abort()
+      localControllersRef.current.delete(tabId)
+      syncMutexRef.current.delete(tabId)
     }
     onTabRemoved.add(handleRemoved)
     return () => { onTabRemoved.delete(handleRemoved) }
@@ -283,10 +408,12 @@ export function useTabSessions(
         return result.report
       }
       updateSessionAndRender(tabId, { error: result.error, status: 'error' })
+      await persistSession(tabId)
       return null
     } catch (e) {
       if (cancelledRef.current.has(tabId)) return null
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
+      await persistSession(tabId)
       return null
     } finally {
       localControllersRef.current.delete(tabId)
@@ -315,10 +442,12 @@ export function useTabSessions(
         return response.payload as AggregatedReport
       }
       updateSessionAndRender(tabId, { error: response.error || 'Analysis failed', status: 'error' })
+      await persistSession(tabId)
       return null
     } catch (e) {
       if (cancelledRef.current.has(tabId)) return null
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
+      await persistSession(tabId)
       return null
     }
   }, [updateSessionAndRender, persistSession])
@@ -329,16 +458,20 @@ export function useTabSessions(
 
     cancelledRef.current.delete(tabId)
     updateSessionAndRender(tabId, {
+      job: extractedJob,
       status: 'analyzing',
       error: null,
       report: null,
       progress: { ...INITIAL_PROGRESS },
     })
+    // Persist the analyzing state BEFORE kicking off the run so an interrupted
+    // run (panel closed mid-analyze) is guaranteed to be recoverable on rehydrate.
+    await persistSession(tabId)
 
     return backendRef.current === 'chrome-prompt'
       ? runLocalAnalysis(tabId, extractedJob)
       : runRemoteAnalysis(tabId, extractedJob)
-  }, [updateSessionAndRender, runLocalAnalysis, runRemoteAnalysis])
+  }, [updateSessionAndRender, persistSession, runLocalAnalysis, runRemoteAnalysis])
 
   const stop = useCallback(() => {
     const tabId = activeTabIdRef.current
@@ -355,11 +488,20 @@ export function useTabSessions(
       error: null,
       progress: { ...INITIAL_PROGRESS },
     })
-  }, [updateSessionAndRender])
+    // Persist so a stopped run isn't later mistaken for an interrupted one.
+    persistSession(tabId).catch(() => {})
+  }, [updateSessionAndRender, persistSession])
 
   const reset = useCallback(() => {
     const tabId = activeTabIdRef.current
     if (!tabId) return
+
+    // Capture job_id before clearing the in-memory session so we can drop the
+    // matching IDB record. "New Analysis" means actually new — the persisted
+    // chat/resume scratch work for this job is discarded. The historical
+    // analysis record in the separate `analyses` store is unaffected and
+    // remains restorable from the History view.
+    const jobId = sessionsRef.current.get(tabId)?.job?.job_id
 
     cancelledRef.current.add(tabId)
     localControllersRef.current.get(tabId)?.abort()
@@ -373,6 +515,7 @@ export function useTabSessions(
       qnaHistory: [],
       hydratedJobId: null,
     })
+    if (jobId) deleteSession(jobId).catch(() => {})
   }, [updateSessionAndRender])
 
   const deleteChatTurn = useCallback(async (index: number) => {
@@ -561,9 +704,9 @@ export function useTabSessions(
       }
     }
     if (activeTabIdRef.current) {
-      hydrateTab(activeTabIdRef.current)
+      syncTab(activeTabIdRef.current, { fromUrlChange: true })
     }
-  }, [hydrateTab])
+  }, [syncTab])
 
   // Current session for the active tab
   const current = activeTabId ? getSession(activeTabId) : DEFAULT_SESSION

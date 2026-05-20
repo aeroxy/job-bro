@@ -1,4 +1,4 @@
-import { Building2, MapPin, Banknote, Clock, BarChart3 } from 'lucide-react'
+import { Building2, MapPin } from 'lucide-react'
 
 import type { ExtractedJob } from '@/types/job'
 
@@ -20,24 +20,6 @@ export function JobSummaryCard({ job }: JobSummaryCardProps) {
           <span className="inline-flex items-center gap-1">
             <MapPin className="size-3" />
             {job.location}
-          </span>
-        )}
-        {job.salary_range && (
-          <span className="inline-flex items-center gap-1">
-            <Banknote className="size-3" />
-            {job.salary_range}
-          </span>
-        )}
-        {job.employment_type && (
-          <span className="inline-flex items-center gap-1">
-            <Clock className="size-3" />
-            {job.employment_type}
-          </span>
-        )}
-        {job.experience_level && (
-          <span className="inline-flex items-center gap-1">
-            <BarChart3 className="size-3" />
-            {job.experience_level}
           </span>
         )}
       </div>

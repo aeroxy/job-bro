@@ -1,4 +1,5 @@
-import { ArrowLeft, Building2, Clock, Trash2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { ArrowLeft, Building2, Clock, Trash2, Check } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { VerdictBadge } from './VerdictBadge'
@@ -23,7 +24,15 @@ function timeAgo(ts: number): string {
 }
 
 export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
-  const { records, loading, remove, clearAll } = useHistory()
+  const { records, orphanCount, loading, remove, clearAll, prune } = useHistory()
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
+
+  // Auto-reset confirmation state after 3 seconds of inactivity
+  useEffect(() => {
+    if (!confirmingId) return
+    const timer = setTimeout(() => setConfirmingId(null), 3000)
+    return () => clearTimeout(timer)
+  }, [confirmingId])
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -34,16 +43,37 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
           </Button>
           <span className="text-sm font-medium">History</span>
         </div>
-        {records.length > 0 && (
+        <div className="flex items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => confirm('Clear all history?') && clearAll()}
-            className="text-xs text-destructive hover:text-destructive cursor-pointer"
+            disabled={orphanCount === 0}
+            onClick={async () => {
+              if (!confirm(`Prune ${orphanCount} incomplete session${orphanCount === 1 ? '' : 's'}? Completed analyses are kept.`)) return
+              try {
+                const removed = await prune()
+                alert(removed > 0
+                  ? `Pruned ${removed} incomplete session${removed === 1 ? '' : 's'}.`
+                  : 'Nothing to prune.')
+              } catch (e) {
+                alert(`Prune failed: ${(e as Error).message}`)
+              }
+            }}
+            className="text-xs text-muted-foreground hover:text-foreground cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Clear All
+            Prune ({orphanCount})
           </Button>
-        )}
+          {records.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => confirm('Clear all history?') && clearAll()}
+              className="text-xs text-destructive hover:text-destructive cursor-pointer"
+            >
+              Clear All
+            </Button>
+          )}
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto p-3">
@@ -67,8 +97,8 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
                   <div className="min-w-0 flex-1">
                     <h4 className="text-xs font-medium truncate">{record.job.title}</h4>
                     <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
-                      <span className="inline-flex items-center gap-0.5">
-                        <Building2 className="size-2.5" />
+                      <span className="inline-flex items-start gap-0.5">
+                        <Building2 className="size-2.5 shrink-0 mt-0.5" />
                         {record.job.company}
                       </span>
                       <span className="inline-flex items-center gap-0.5 whitespace-nowrap">
@@ -85,14 +115,26 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
                     />
                     <Button
                       variant="ghost"
-                      size="icon-sm"
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (confirm('Delete this analysis?')) remove(record.id)
+                        if (confirmingId === record.id) {
+                          remove(record.id)
+                          setConfirmingId(null)
+                        } else {
+                          setConfirmingId(record.id)
+                        }
                       }}
-                      className="opacity-0 group-hover:opacity-100 cursor-pointer size-6"
+                      className={`cursor-pointer size-7 rounded-md transition-all duration-200 ${
+                        confirmingId === record.id
+                          ? 'bg-destructive/10 text-destructive opacity-100'
+                          : 'opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive'
+                      }`}
                     >
-                      <Trash2 className="size-3 text-destructive" />
+                      {confirmingId === record.id ? (
+                        <Check className="size-3.5 text-destructive animate-scale-in" />
+                      ) : (
+                        <Trash2 className="size-3.5 text-muted-foreground" />
+                      )}
                     </Button>
                   </div>
                 </div>
