@@ -175,6 +175,7 @@ export default function App() {
   // --- Main view ---
 
   const isWorking = status === 'extracting' || status === 'analyzing'
+  const isHydrating = status === 'hydrating'
   const usingChrome = llmConfig.backend === 'chrome-prompt'
   const chromeBlocked = usingChrome && chromeAi.status !== 'available'
   const canAnalyze = isProfileComplete && isLLMConfigured && !chromeBlocked
@@ -279,7 +280,16 @@ export default function App() {
           </div>
         )}
 
+        {/* Hydrating — brief flash while loading the active tab's state */}
+        {isHydrating && (
+          <div className="flex items-center justify-center gap-2 text-muted-foreground text-xs mt-4">
+            <Spinner className="size-3" />
+            Loading…
+          </div>
+        )}
+
         {/* Action buttons */}
+        {!isHydrating && (
         <div className="flex gap-2">
           {!job && !report && (
             <Button
@@ -307,7 +317,7 @@ export default function App() {
             </Button>
           )}
 
-          {job && !report && (
+          {job && !report && status !== 'error' && (
             status === 'analyzing' ? (
               <Button
                 onClick={stop}
@@ -341,7 +351,33 @@ export default function App() {
             )
           )}
 
-          {(report || status === 'error') && (
+          {status === 'error' && (
+            <>
+              <Button
+                onClick={handleAnalyze}
+                disabled={!canAnalyze || isWorking}
+                className="flex-1 cursor-pointer"
+                size="sm"
+              >
+                <Zap className="size-3" />
+                Analyze
+              </Button>
+              <Button
+                onClick={() => {
+                  reset()
+                  resetResume()
+                }}
+                variant="outline"
+                className="flex-1 cursor-pointer"
+                size="sm"
+              >
+                <RefreshCw className="size-3" />
+                New Analysis
+              </Button>
+            </>
+          )}
+
+          {report && (
             <>
               <Button
                 onClick={() => {
@@ -355,50 +391,51 @@ export default function App() {
                 <RefreshCw className="size-3" />
                 New Analysis
               </Button>
-              {report && (
-                <Button
-                  onClick={handleGenerateResume}
-                  className="flex-1 cursor-pointer"
-                  size="sm"
-                >
-                  <FileText className="size-3" />
-                  {resumeMarkdown ? 'View Resume' : 'Generate Resume'}
-                </Button>
-              )}
+              <Button
+                onClick={handleGenerateResume}
+                className="flex-1 cursor-pointer"
+                size="sm"
+              >
+                <FileText className="size-3" />
+                {resumeMarkdown ? 'View Resume' : 'Generate Resume'}
+              </Button>
             </>
           )}
         </div>
+        )}
 
         {/* Error */}
-        {error && (
+        {!isHydrating && error && (
           <div className="border border-destructive/50 rounded-lg p-3 bg-destructive/5">
             <p className="text-xs text-destructive">{error}</p>
           </div>
         )}
 
         {/* Job summary */}
-        {job && <JobSummaryCard job={job} />}
+        {!isHydrating && job && <JobSummaryCard job={job} />}
 
         {/* Analysis results */}
-        <AnalysisReport
-          report={report}
-          progress={progress}
-          analyzing={status === 'analyzing'}
-          job={job}
-          qnaHistory={qnaHistory}
-          chatLoading={chatLoading}
-          currentTabId={activeTabId!}
-          useChromeBackend={usingChrome}
-          profile={profile}
-          customPrompt={activeCustomPrompt}
-          onAppendChat={appendChatTurns}
-          onSetChatLoading={setChatLoading}
-          onBumpChatNonce={bumpChatNonce}
-          onDeleteChatTurn={deleteChatTurn}
-        />
+        {!isHydrating && (
+          <AnalysisReport
+            report={report}
+            progress={progress}
+            analyzing={status === 'analyzing'}
+            job={job}
+            qnaHistory={qnaHistory}
+            chatLoading={chatLoading}
+            currentTabId={activeTabId!}
+            useChromeBackend={usingChrome}
+            profile={profile}
+            customPrompt={activeCustomPrompt}
+            onAppendChat={appendChatTurns}
+            onSetChatLoading={setChatLoading}
+            onBumpChatNonce={bumpChatNonce}
+            onDeleteChatTurn={deleteChatTurn}
+          />
+        )}
 
         {/* Empty state */}
-        {!job && !report && !error && !isWorking && !profileLoading && (
+        {!job && !report && !error && !isWorking && !isHydrating && !profileLoading && (
           <div className="text-center text-muted-foreground text-sm mt-4">
             <Briefcase className="size-12 mx-auto mb-3 opacity-20" />
             <p className="font-medium">Ready to analyze</p>

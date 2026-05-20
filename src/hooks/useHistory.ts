@@ -7,6 +7,7 @@ import {
   deleteSession,
   getSessionByJobId,
   listSessions,
+  pruneOrphanSessions,
   saveSession,
 } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
@@ -64,12 +65,14 @@ export async function restoreRecord(
 
 export function useHistory() {
   const [records, setRecords] = useState<AnalysisRecord[]>([])
+  const [orphanCount, setOrphanCount] = useState(0)
   const [loading, setLoading] = useState(true)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     const sessions = await listSessions()
     setRecords(sessions.filter((s) => s.report !== null).map(sessionToRecord))
+    setOrphanCount(sessions.filter((s) => s.report === null).length)
     setLoading(false)
   }, [])
 
@@ -87,11 +90,17 @@ export function useHistory() {
     await refresh()
   }, [refresh])
 
+  const prune = useCallback(async (): Promise<number> => {
+    const removed = await pruneOrphanSessions()
+    setOrphanCount(0)
+    return removed
+  }, [])
+
   const get = useCallback(async (id: string): Promise<AnalysisRecord | undefined> => {
     const session = await getSessionByJobId(id)
     if (!session?.report) return undefined
     return sessionToRecord(session)
   }, [])
 
-  return { records, loading, refresh, remove, clearAll, get }
+  return { records, orphanCount, loading, refresh, remove, clearAll, prune, get }
 }
