@@ -109,13 +109,12 @@ export function useTabSessions(
     return sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
   }, [])
 
-  // Helper: update a session and re-render if it's the active tab
-  const updateSession = useCallback((tabId: number, patch: Partial<TabSession>) => {
-    const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
-    
-    // Maintain jobId mapping
+  // Helper: sync the jobIdToTabIdsRef mapping when a session's jobId changes
+  const updateJobIdMapping = useCallback((tabId: number, session: TabSession, patch: Partial<TabSession>) => {
     const oldJobId = session.job?.job_id || session.hydratedJobId
-    const newJobId = patch.job?.job_id || patch.hydratedJobId || oldJobId
+    const newJobId = ('job' in patch)
+      ? (patch.job?.job_id || null)
+      : ('hydratedJobId' in patch ? patch.hydratedJobId : oldJobId)
 
     if (oldJobId && oldJobId !== newJobId) {
       jobIdToTabIdsRef.current.get(oldJobId)?.delete(tabId)
@@ -126,9 +125,15 @@ export function useTabSessions(
       }
       jobIdToTabIdsRef.current.get(newJobId)!.add(tabId)
     }
-
-    sessionsRef.current.set(tabId, { ...session, ...patch })
+    return newJobId
   }, [])
+
+  // Helper: update a session and re-render if it's the active tab
+  const updateSession = useCallback((tabId: number, patch: Partial<TabSession>) => {
+    const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
+    updateJobIdMapping(tabId, session, patch)
+    sessionsRef.current.set(tabId, { ...session, ...patch })
+  }, [updateJobIdMapping])
 
   // Keep a ref to activeTabId so we can check it in callbacks
   const activeTabIdRef = useRef(activeTabId)
@@ -141,20 +146,7 @@ export function useTabSessions(
   // view on one tab updates the other tab's sidepanel to match).
   const updateSessionAndRender = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
-    
-    // Maintain jobId mapping
-    const oldJobId = session.job?.job_id || session.hydratedJobId
-    const newJobId = patch.job?.job_id || patch.hydratedJobId || oldJobId
-
-    if (oldJobId && oldJobId !== newJobId) {
-      jobIdToTabIdsRef.current.get(oldJobId)?.delete(tabId)
-    }
-    if (newJobId) {
-      if (!jobIdToTabIdsRef.current.has(newJobId)) {
-        jobIdToTabIdsRef.current.set(newJobId, new Set())
-      }
-      jobIdToTabIdsRef.current.get(newJobId)!.add(tabId)
-    }
+    const newJobId = updateJobIdMapping(tabId, session, patch)
 
     const updated = { ...session, ...patch }
     sessionsRef.current.set(tabId, updated)
@@ -180,7 +172,7 @@ export function useTabSessions(
     if (shouldRerender) {
       rerender()
     }
-  }, [rerender])
+  }, [rerender, updateJobIdMapping])
 
   // Cancel the in-flight analysis for a tab AND any sibling tabs viewing the
   // same jobId. Marks all related tabIds in cancelledRef, aborts the local
@@ -200,8 +192,10 @@ export function useTabSessions(
     // Also cancel any sibling tabs with the same jobId — one of them may own
     // the actual running controller.
     if (jobId) {
-      for (const [tId, s] of sessionsRef.current.entries()) {
-        if (tId !== tabId && s.job?.job_id === jobId) {
+      const siblings = jobIdToTabIdsRef.current.get(jobId)
+      if (siblings) {
+        for (const tId of siblings) {
+          if (tId === tabId) continue
           cancelledRef.current.add(tId)
           localControllersRef.current.get(tId)?.abort()
           localControllersRef.current.delete(tId)
@@ -310,12 +304,17 @@ export function useTabSessions(
       }
 
       // Check if another tab is actively running this analysis right now
-      const activeSiblingSession = Array.from(sessionsRef.current.entries()).find(
-        ([tId, s]) =>
-          tId !== tabId &&
-          s.job?.job_id === jobId &&
-          (s.status === 'analyzing' || s.status === 'extracting')
-      )?.[1]
+      const activeSiblingSession = (() => {
+        if (!jobId) return null
+        const siblings = jobIdToTabIdsRef.current.get(jobId)
+        if (!siblings) return null
+        for (const tId of siblings) {
+          if (tId === tabId) continue
+          const s = sessionsRef.current.get(tId)
+          if (s?.status === 'analyzing' || s?.status === 'extracting') return s
+        }
+        return null
+      })()
 
       const wasInterrupted =
         !activeSiblingSession &&
