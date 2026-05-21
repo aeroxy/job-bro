@@ -20,17 +20,13 @@ export default defineContentScript({
       chrome.runtime.sendMessage({ type: 'URL_CHANGED', url: lastUrl }).catch(() => {})
     }
     window.addEventListener('popstate', broadcastIfChanged)
-    // Use a throttled requestAnimationFrame loop to detect SPA navigation. 
-    // This naturally stops when the tab is in the background, saving resources.
-    let lastPoll = 0
-    const poll = (now: number) => {
-      if (now - lastPoll >= 500) {
+    // Detect SPA navigation by polling the URL while the tab is visible. 
+    // This is more CPU-efficient than a requestAnimationFrame loop.
+    setInterval(() => {
+      if (document.visibilityState === 'visible') {
         broadcastIfChanged()
-        lastPoll = now
       }
-      requestAnimationFrame(poll)
-    }
-    requestAnimationFrame(poll)
+    }, 500)
 
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type !== 'EXTRACT_JD') return false

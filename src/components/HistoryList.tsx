@@ -28,67 +28,75 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
   const [confirmingId, setConfirmingId] = useAutoResetState<string | null>(null)
   const [confirmingPrune, setConfirmingPrune] = useAutoResetState(false)
   const [confirmingClearAll, setConfirmingClearAll] = useAutoResetState(false)
+  const [error, setError] = useAutoResetState<string | null>(null, 5000)
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      <header className="flex items-center justify-between border-b px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon-sm" onClick={onBack} className="cursor-pointer">
-            <ArrowLeft className="size-3.5" />
-          </Button>
-          <span className="text-sm font-medium">History</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={orphanCount === 0}
-            onClick={async () => {
-              if (confirmingPrune) {
-                try {
-                  await prune()
-                } catch (e) {
-                  alert(`Prune failed: ${(e as Error).message}`)
-                }
-                setConfirmingPrune(false)
-              } else {
-                setConfirmingPrune(true)
-              }
-            }}
-            className={`text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${
-              confirmingPrune
-                ? 'bg-destructive/10 text-destructive hover:text-destructive'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {confirmingPrune ? 'Confirm Prune' : `Prune (${orphanCount})`}
-          </Button>
-          {records.length > 0 && (
+      <header className="flex flex-col border-b">
+        <div className="flex items-center justify-between px-3 py-2">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon-sm" onClick={onBack} className="cursor-pointer">
+              <ArrowLeft className="size-3.5" />
+            </Button>
+            <span className="text-sm font-medium">History</span>
+          </div>
+          <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
+              disabled={orphanCount === 0}
               onClick={async () => {
-                if (confirmingClearAll) {
+                if (confirmingPrune) {
                   try {
-                    await clearAll()
+                    await prune()
                   } catch (e) {
-                    alert(`Clear all failed: ${(e as Error).message}`)
+                    setError(`Prune failed: ${(e as Error).message}`)
                   }
-                  setConfirmingClearAll(false)
+                  setConfirmingPrune(false)
                 } else {
-                  setConfirmingClearAll(true)
+                  setConfirmingPrune(true)
                 }
               }}
-              className={`text-xs cursor-pointer transition-all duration-200 ${
-                confirmingClearAll
-                  ? 'bg-destructive/10 text-destructive hover:bg-destructive/20'
-                  : 'text-destructive hover:text-destructive'
+              className={`text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${
+                confirmingPrune
+                  ? 'bg-destructive/10 text-destructive hover:text-destructive'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {confirmingClearAll ? 'Confirm Clear All' : 'Clear All'}
+              {confirmingPrune ? 'Confirm Prune' : `Prune (${orphanCount})`}
             </Button>
-          )}
+            {records.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  if (confirmingClearAll) {
+                    try {
+                      await clearAll()
+                    } catch (e) {
+                      setError(`Clear all failed: ${(e as Error).message}`)
+                    }
+                    setConfirmingClearAll(false)
+                  } else {
+                    setConfirmingClearAll(true)
+                  }
+                }}
+                className={`text-xs cursor-pointer transition-all duration-200 ${
+                  confirmingClearAll
+                    ? 'bg-destructive/10 text-destructive hover:bg-destructive/20'
+                    : 'text-destructive hover:text-destructive'
+                }`}
+              >
+                {confirmingClearAll ? 'Confirm Clear All' : 'Clear All'}
+              </Button>
+            )}
+          </div>
         </div>
+        {error && (
+          <div className="bg-destructive/10 text-destructive text-[10px] px-3 py-1.5 border-t animate-in fade-in slide-in-from-top-1">
+            {error}
+          </div>
+        )}
       </header>
 
       <div className="flex-1 overflow-y-auto p-3">
@@ -136,7 +144,7 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
                           try {
                             await remove(record.id)
                           } catch (e) {
-                            alert(`Delete failed: ${(e as Error).message}`)
+                            setError(`Delete failed: ${(e as Error).message}`)
                           }
                           setConfirmingId(null)
                         } else {
