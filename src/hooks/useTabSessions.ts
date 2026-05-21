@@ -359,11 +359,16 @@ export function useTabSessions(
       }
     } catch (err) {
       console.error('[Job Bro] syncTab failed:', err)
-      // Surface the error to the user instead of leaving the UI stuck in 'hydrating'
-      updateSessionAndRender(tabId, {
-        status: 'error',
-        error: 'Failed to load tab state. Please try again.',
-      })
+      // Surface the error only if the session still exists and is hydrating.
+      // A closed tab will have its session cleaned up by onRemoved, so we
+      // must not recreate it here.
+      const latest = sessionsRef.current.get(tabId)
+      if (latest?.status === 'hydrating') {
+        updateSessionAndRender(tabId, {
+          status: 'error',
+          error: 'Failed to load tab state. Please try again.',
+        })
+      }
     }
     })()
     
