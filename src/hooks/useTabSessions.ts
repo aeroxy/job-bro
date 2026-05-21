@@ -189,25 +189,22 @@ export function useTabSessions(
     const session = sessionsRef.current.get(tabId)
     const jobId = session?.job?.job_id
 
-    // Always cancel the given tab
-    cancelledRef.current.add(tabId)
-    localControllersRef.current.get(tabId)?.abort()
-    localControllersRef.current.delete(tabId)
-    chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId }).catch(() => {})
-
-    // Also cancel any sibling tabs with the same jobId — one of them may own
-    // the actual running controller.
+    // Collect all tab IDs to cancel: the given tab + any siblings with the same jobId
+    const toCancel = new Set<number>([tabId])
     if (jobId) {
       const siblings = jobIdToTabIdsRef.current.get(jobId)
       if (siblings) {
         for (const tId of siblings) {
-          if (tId === tabId) continue
-          cancelledRef.current.add(tId)
-          localControllersRef.current.get(tId)?.abort()
-          localControllersRef.current.delete(tId)
-          chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId: tId }).catch(() => {})
+          if (tId !== tabId) toCancel.add(tId)
         }
       }
+    }
+
+    for (const tId of toCancel) {
+      cancelledRef.current.add(tId)
+      localControllersRef.current.get(tId)?.abort()
+      localControllersRef.current.delete(tId)
+      chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId: tId }).catch(() => {})
     }
   }, [])
 
@@ -255,28 +252,29 @@ export function useTabSessions(
       await prev
     } catch {}
 
-    let tabUrl: string | undefined
     try {
-      const tab = await chrome.tabs.get(tabId)
-      tabUrl = tab.url
-    } catch {
-      return // tab closed during the await
-    }
-
-    const current = sessionsRef.current.get(tabId)
-    const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
-    const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
-    const currentJobId = current?.job?.job_id || current?.hydratedJobId
-    // URL change while mid-run — only cancel if the job actually changed
-    // (e.g. not just tracking params or hash fragment updates).
-    if (midRun && opts.fromUrlChange && currentJobId !== jobId) {
-      const siblings = currentJobId ? jobIdToTabIdsRef.current.get(currentJobId) : null
-      const otherTabsViewingJob = Array.from(siblings ?? []).filter((t) => t !== tabId)
-
-      if (otherTabsViewingJob.length === 0) {
-        cancelAnalysis(tabId)
+      let tabUrl: string | undefined
+      try {
+        const tab = await chrome.tabs.get(tabId)
+        tabUrl = tab.url
+      } catch {
+        return // tab closed during the await
       }
-    }
+
+      const current = sessionsRef.current.get(tabId)
+      const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
+      const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
+      const currentJobId = current?.job?.job_id || current?.hydratedJobId
+      // URL change while mid-run — only cancel if the job actually changed
+      // (e.g. not just tracking params or hash fragment updates).
+      if (midRun && opts.fromUrlChange && currentJobId !== jobId) {
+        const siblings = currentJobId ? jobIdToTabIdsRef.current.get(currentJobId) : null
+        const otherTabsViewingJob = Array.from(siblings ?? []).filter((t) => t !== tabId)
+
+        if (otherTabsViewingJob.length === 0) {
+          cancelAnalysis(tabId)
+        }
+      }
 
       // Fast path: same job already loaded, nothing to do.
       if (current && current.hydratedJobId === jobId) {
@@ -359,6 +357,10 @@ export function useTabSessions(
             : null,
         })
       }
+    } catch {
+      // Swallow errors to prevent breaking the mutex chain. syncTab callers
+      // (useEffect, onMessage) cannot attach .catch() so this must be fire-and-forget.
+    }
     })()
     
     const finalRun = run.finally(() => {
@@ -577,7 +579,9 @@ export function useTabSessions(
 
     // Cancel analysis on this tab and any siblings viewing the same job.
     cancelAnalysis(tabId)
+    const current = sessionsRef.current.get(tabId)
     updateSessionAndRender(tabId, {
+      job: current?.job ?? null,
       status: 'idle',
       error: null,
       progress: { ...INITIAL_PROGRESS },
