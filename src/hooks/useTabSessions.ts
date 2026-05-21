@@ -117,7 +117,11 @@ export function useTabSessions(
       : ('hydratedJobId' in patch ? patch.hydratedJobId : oldJobId)
 
     if (oldJobId && oldJobId !== newJobId) {
-      jobIdToTabIdsRef.current.get(oldJobId)?.delete(tabId)
+      const set = jobIdToTabIdsRef.current.get(oldJobId)
+      set?.delete(tabId)
+      if (set?.size === 0) {
+        jobIdToTabIdsRef.current.delete(oldJobId)
+      }
     }
     if (newJobId) {
       if (!jobIdToTabIdsRef.current.has(newJobId)) {
@@ -280,11 +284,17 @@ export function useTabSessions(
       }
 
       // Synchronous reset before async IDB fetch — kills stale content immediately.
-      sessionsRef.current.set(tabId, {
+      // Note: We MUST call updateJobIdMapping before overwriting sessionsRef to 
+      // ensure the old jobId is correctly identified and cleaned up from the mapping.
+      const resetSession = {
         ...DEFAULT_SESSION,
         progress: { ...INITIAL_PROGRESS },
         status: jobId ? 'hydrating' : 'idle',
-      })
+      }
+      if (current) {
+        updateJobIdMapping(tabId, current, resetSession)
+      }
+      sessionsRef.current.set(tabId, resetSession)
       if (tabId === activeTabIdRef.current) rerender()
 
       if (!jobId) {
@@ -399,7 +409,11 @@ export function useTabSessions(
       const session = sessionsRef.current.get(tabId)
       const jobId = session?.job?.job_id || session?.hydratedJobId
       if (jobId) {
-        jobIdToTabIdsRef.current.get(jobId)?.delete(tabId)
+        const set = jobIdToTabIdsRef.current.get(jobId)
+        set?.delete(tabId)
+        if (set?.size === 0) {
+          jobIdToTabIdsRef.current.delete(jobId)
+        }
       }
 
       sessionsRef.current.delete(tabId)
