@@ -351,7 +351,7 @@ export default function App() {
             )
           )}
 
-          {status === 'error' && (
+          {job && status === 'error' && (
             <>
               <Button
                 onClick={handleAnalyze}
