@@ -2,24 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 
 import {
   type AnalysisRecord,
-  type PersistedSession,
-  clearSessions,
-  deleteSession,
+  clearAnalyses,
+  deleteAnalysis,
+  getAnalysis,
   getSessionByJobId,
+  listAnalyses,
   listSessions,
   pruneOrphanSessions,
   saveSession,
 } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
-
-function sessionToRecord(s: PersistedSession): AnalysisRecord {
-  return {
-    id: s.job_id,
-    job: s.job,
-    report: s.report!,
-    createdAt: s.updatedAt,
-  }
-}
 
 async function openOrFocusTab(url: string, jobId?: string): Promise<void> {
   if (jobId) {
@@ -70,8 +62,8 @@ export function useHistory() {
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    const sessions = await listSessions()
-    setRecords(sessions.filter((s) => s.report !== null).map(sessionToRecord))
+    const [analyses, sessions] = await Promise.all([listAnalyses(), listSessions()])
+    setRecords(analyses)
     setOrphanCount(sessions.filter((s) =>
       s.report === null && s.status !== 'analyzing' && s.status !== 'extracting'
     ).length)
@@ -84,11 +76,11 @@ export function useHistory() {
 
   const remove = useCallback(async (id: string) => {
     setRecords((prev) => prev.filter((r) => r.id !== id))
-    await deleteSession(id)
+    await deleteAnalysis(id)
   }, [])
 
   const clearAll = useCallback(async () => {
-    await clearSessions()
+    await clearAnalyses()
     await refresh()
   }, [refresh])
 
@@ -99,9 +91,7 @@ export function useHistory() {
   }, [])
 
   const get = useCallback(async (id: string): Promise<AnalysisRecord | undefined> => {
-    const session = await getSessionByJobId(id)
-    if (!session?.report) return undefined
-    return sessionToRecord(session)
+    return getAnalysis(id)
   }, [])
 
   return { records, orphanCount, loading, refresh, remove, clearAll, prune, get }
