@@ -12,6 +12,9 @@ export default defineContentScript({
     // Broadcast popstate (back/forward) so the sidepanel can resync.
     // chrome.tabs.onUpdated in the sidepanel already handles pushState transitions;
     // popstate is a browser-level event that fires in the isolated world.
+    // Note: This does not detect SPA navigation via history.pushState/replaceState
+    // which LinkedIn currently doesn't use for main job navigation, but if it
+    // becomes a full SPA in the future, we'll need to wrap those methods too.
     let lastUrl = location.href
     const broadcastIfChanged = () => {
       if (location.href === lastUrl) return
