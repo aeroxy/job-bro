@@ -357,7 +357,8 @@ export function useTabSessions(
             : null,
         })
       }
-    } catch {
+    } catch (err) {
+      console.error('[Job Bro] syncTab failed:', err)
       // Swallow errors to prevent breaking the mutex chain. syncTab callers
       // (useEffect, onMessage) cannot attach .catch() so this must be fire-and-forget.
     }
@@ -579,9 +580,7 @@ export function useTabSessions(
 
     // Cancel analysis on this tab and any siblings viewing the same job.
     cancelAnalysis(tabId)
-    const current = sessionsRef.current.get(tabId)
     updateSessionAndRender(tabId, {
-      job: current?.job ?? null,
       status: 'idle',
       error: null,
       progress: { ...INITIAL_PROGRESS },
