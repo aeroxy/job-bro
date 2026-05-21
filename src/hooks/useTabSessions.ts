@@ -84,6 +84,9 @@ export function useTabSessions(
   llmConfig: LLMConfig,
 ) {
   const sessionsRef = useRef(new Map<number, TabSession>())
+  // Optimization: secondary mapping for O(1) sibling tab lookups. Maps jobId -> Set of tabIds.
+  const jobIdToTabIdsRef = useRef(new Map<string, Set<number>>())
+
   // Increment to force re-render when the active tab's session changes
   const [, setTick] = useState(0)
   const rerender = useCallback(() => setTick((t) => t + 1), [])
@@ -109,6 +112,21 @@ export function useTabSessions(
   // Helper: update a session and re-render if it's the active tab
   const updateSession = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
+    
+    // Maintain jobId mapping
+    const oldJobId = session.job?.job_id || session.hydratedJobId
+    const newJobId = patch.job?.job_id || patch.hydratedJobId || oldJobId
+
+    if (oldJobId && oldJobId !== newJobId) {
+      jobIdToTabIdsRef.current.get(oldJobId)?.delete(tabId)
+    }
+    if (newJobId) {
+      if (!jobIdToTabIdsRef.current.has(newJobId)) {
+        jobIdToTabIdsRef.current.set(newJobId, new Set())
+      }
+      jobIdToTabIdsRef.current.get(newJobId)!.add(tabId)
+    }
+
     sessionsRef.current.set(tabId, { ...session, ...patch })
   }, [])
 
@@ -123,18 +141,37 @@ export function useTabSessions(
   // view on one tab updates the other tab's sidepanel to match).
   const updateSessionAndRender = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
+    
+    // Maintain jobId mapping
+    const oldJobId = session.job?.job_id || session.hydratedJobId
+    const newJobId = patch.job?.job_id || patch.hydratedJobId || oldJobId
+
+    if (oldJobId && oldJobId !== newJobId) {
+      jobIdToTabIdsRef.current.get(oldJobId)?.delete(tabId)
+    }
+    if (newJobId) {
+      if (!jobIdToTabIdsRef.current.has(newJobId)) {
+        jobIdToTabIdsRef.current.set(newJobId, new Set())
+      }
+      jobIdToTabIdsRef.current.get(newJobId)!.add(tabId)
+    }
+
     const updated = { ...session, ...patch }
     sessionsRef.current.set(tabId, updated)
     
     let shouldRerender = tabId === activeTabIdRef.current
-    const jobId = patch.job?.job_id ?? session.job?.job_id
 
-    if (jobId) {
-      for (const [tId, s] of sessionsRef.current.entries()) {
-        if (tId !== tabId && (s.job?.job_id === jobId || s.hydratedJobId === jobId)) {
-          sessionsRef.current.set(tId, { ...s, ...patch })
-          if (tId === activeTabIdRef.current) {
-            shouldRerender = true
+    if (newJobId) {
+      const siblings = jobIdToTabIdsRef.current.get(newJobId)
+      if (siblings) {
+        for (const tId of siblings) {
+          if (tId === tabId) continue
+          const s = sessionsRef.current.get(tId)
+          if (s) {
+            sessionsRef.current.set(tId, { ...s, ...patch })
+            if (tId === activeTabIdRef.current) {
+              shouldRerender = true
+            }
           }
         }
       }
@@ -360,6 +397,12 @@ export function useTabSessions(
   // Clean up sessions when tabs are closed
   useEffect(() => {
     const handleRemoved = (tabId: number) => {
+      const session = sessionsRef.current.get(tabId)
+      const jobId = session?.job?.job_id || session?.hydratedJobId
+      if (jobId) {
+        jobIdToTabIdsRef.current.get(jobId)?.delete(tabId)
+      }
+
       sessionsRef.current.delete(tabId)
       cancelledRef.current.delete(tabId)
       localControllersRef.current.get(tabId)?.abort()
@@ -504,7 +547,11 @@ export function useTabSessions(
     })
     // Persist the analyzing state BEFORE kicking off the run so an interrupted
     // run (panel closed mid-analyze) is guaranteed to be recoverable on rehydrate.
-    await persistSession(tabId)
+    try {
+      await persistSession(tabId)
+    } catch (e) {
+      console.error('[Job Bro] Failed to persist initial analysis state:', e)
+    }
 
     return backendRef.current === 'chrome-prompt'
       ? runLocalAnalysis(tabId, extractedJob)
