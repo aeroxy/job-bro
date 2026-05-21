@@ -359,8 +359,11 @@ export function useTabSessions(
       }
     } catch (err) {
       console.error('[Job Bro] syncTab failed:', err)
-      // Swallow errors to prevent breaking the mutex chain. syncTab callers
-      // (useEffect, onMessage) cannot attach .catch() so this must be fire-and-forget.
+      // Surface the error to the user instead of leaving the UI stuck in 'hydrating'
+      updateSessionAndRender(tabId, {
+        status: 'error',
+        error: 'Failed to load tab state. Please try again.',
+      })
     }
     })()
     
