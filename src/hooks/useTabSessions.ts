@@ -267,7 +267,13 @@ export function useTabSessions(
       // URL change while mid-run — only cancel if the job actually changed
       // (e.g. not just tracking params or hash fragment updates).
       if (midRun && opts.fromUrlChange && current?.hydratedJobId !== jobId) {
-        cancelAnalysis(tabId)
+        const otherTabsViewingJob = Array.from(
+          jobIdToTabIdsRef.current.get(current.hydratedJobId!) ?? []
+        ).filter((t) => t !== tabId)
+
+        if (otherTabsViewingJob.length === 0) {
+          cancelAnalysis(tabId)
+        }
       }
 
       // Fast path: same job already loaded, nothing to do.

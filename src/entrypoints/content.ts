@@ -10,23 +10,45 @@ export default defineContentScript({
     console.log('[Job Bro] Content script loaded on', location.href)
 
     // Broadcast URL changes so the sidepanel can resync. LinkedIn uses a mix of
-    // standard navigation and SPA-style pushState transitions. popstate only
-    // catches browser-level navigation; we use a polling observer to catch
-    // internal SPA transitions.
+    // standard navigation and SPA-style pushState transitions.
     let lastUrl = location.href
     const broadcastIfChanged = () => {
       if (location.href === lastUrl) return
       lastUrl = location.href
       chrome.runtime.sendMessage({ type: 'URL_CHANGED', url: lastUrl }).catch(() => {})
     }
+
+    // 1. Listen for browser-level back/forward navigation
     window.addEventListener('popstate', broadcastIfChanged)
-    // Detect SPA navigation by polling the URL while the tab is visible. 
-    // This is more CPU-efficient than a requestAnimationFrame loop.
-    setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        broadcastIfChanged()
-      }
-    }, 500)
+
+    // 2. Inject a script into the main world to catch SPA-level pushState/replaceState.
+    // This is more reactive than polling and handles internal LinkedIn navigation.
+    try {
+      const script = document.createElement('script')
+      script.textContent = `
+        (function() {
+          const wrap = (type) => {
+            const orig = history[type];
+            return function() {
+              const rv = orig.apply(this, arguments);
+              const event = new Event('job-bro-url-change');
+              window.dispatchEvent(event);
+              return rv;
+            };
+          };
+          history.pushState = wrap('pushState');
+          history.replaceState = wrap('replaceState');
+        })();
+      `
+      // Standard injection: head is guaranteed at document_end
+      ;(document.head || document.documentElement).appendChild(script)
+      script.remove()
+      
+      // Listen for the custom event dispatched by our main-world wrapper
+      window.addEventListener('job-bro-url-change', broadcastIfChanged)
+    } catch (e) {
+      console.warn('[Job Bro] Failed to inject SPA tracker (likely CSP):', e)
+    }
 
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type !== 'EXTRACT_JD') return false
