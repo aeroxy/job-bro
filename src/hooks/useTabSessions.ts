@@ -193,11 +193,7 @@ export function useTabSessions(
     const toCancel = new Set<number>([tabId])
     if (jobId) {
       const siblings = jobIdToTabIdsRef.current.get(jobId)
-      if (siblings) {
-        for (const tId of siblings) {
-          if (tId !== tabId) toCancel.add(tId)
-        }
-      }
+      siblings?.forEach((tId) => toCancel.add(tId))
     }
 
     for (const tId of toCancel) {
@@ -253,13 +249,9 @@ export function useTabSessions(
     } catch {}
 
     try {
-      let tabUrl: string | undefined
-      try {
-        const tab = await chrome.tabs.get(tabId)
-        tabUrl = tab.url
-      } catch {
-        return // tab closed during the await
-      }
+      const tab = await chrome.tabs.get(tabId).catch(() => null)
+      if (!tab) return // tab closed during the await
+      const tabUrl = tab.url
 
       const current = sessionsRef.current.get(tabId)
       const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
@@ -358,7 +350,7 @@ export function useTabSessions(
         })
       }
     } catch (err) {
-      console.error('[Job Bro] syncTab failed:', err)
+      console.error(`[Job Bro] syncTab failed for tab ${tabId}:`, err)
       // Surface the error only if the session still exists and is hydrating.
       // A closed tab will have its session cleaned up by onRemoved, so we
       // must not recreate it here.
