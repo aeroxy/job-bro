@@ -256,12 +256,6 @@ export function useTabSessions(
       const current = sessionsRef.current.get(tabId)
       const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
 
-      if (midRun && !opts.fromUrlChange) {
-        // Tab switch onto a mid-run tab — leave session as-is. The active-tab
-        // re-render is driven by activeTabId changing, no setTick needed.
-        return
-      }
-
       let tabUrl: string | undefined
       try {
         const tab = await chrome.tabs.get(tabId)
