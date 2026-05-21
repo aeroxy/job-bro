@@ -9,12 +9,10 @@ export default defineContentScript({
   main() {
     console.log('[Job Bro] Content script loaded on', location.href)
 
-    // Broadcast popstate (back/forward) so the sidepanel can resync.
-    // chrome.tabs.onUpdated in the sidepanel already handles pushState transitions;
-    // popstate is a browser-level event that fires in the isolated world.
-    // Note: This does not detect SPA navigation via history.pushState/replaceState
-    // which LinkedIn currently doesn't use for main job navigation, but if it
-    // becomes a full SPA in the future, we'll need to wrap those methods too.
+    // Broadcast URL changes so the sidepanel can resync. LinkedIn uses a mix of
+    // standard navigation and SPA-style pushState transitions. popstate only
+    // catches browser-level navigation; we use a polling observer to catch
+    // internal SPA transitions.
     let lastUrl = location.href
     const broadcastIfChanged = () => {
       if (location.href === lastUrl) return
@@ -22,6 +20,17 @@ export default defineContentScript({
       chrome.runtime.sendMessage({ type: 'URL_CHANGED', url: lastUrl }).catch(() => {})
     }
     window.addEventListener('popstate', broadcastIfChanged)
+    // Use a throttled requestAnimationFrame loop to detect SPA navigation. 
+    // This naturally stops when the tab is in the background, saving resources.
+    let lastPoll = 0
+    const poll = (now: number) => {
+      if (now - lastPoll >= 500) {
+        broadcastIfChanged()
+        lastPoll = now
+      }
+      requestAnimationFrame(poll)
+    }
+    requestAnimationFrame(poll)
 
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type !== 'EXTRACT_JD') return false
