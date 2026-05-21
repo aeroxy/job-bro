@@ -266,17 +266,17 @@ export function useTabSessions(
     const current = sessionsRef.current.get(tabId)
     const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
     const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
-      // URL change while mid-run — only cancel if the job actually changed
-      // (e.g. not just tracking params or hash fragment updates).
-      if (midRun && opts.fromUrlChange && current?.hydratedJobId !== jobId) {
-        const otherTabsViewingJob = Array.from(
-          jobIdToTabIdsRef.current.get(current.hydratedJobId!) ?? []
-        ).filter((t) => t !== tabId)
+    const currentJobId = current?.job?.job_id || current?.hydratedJobId
+    // URL change while mid-run — only cancel if the job actually changed
+    // (e.g. not just tracking params or hash fragment updates).
+    if (midRun && opts.fromUrlChange && currentJobId !== jobId) {
+      const siblings = currentJobId ? jobIdToTabIdsRef.current.get(currentJobId) : null
+      const otherTabsViewingJob = Array.from(siblings ?? []).filter((t) => t !== tabId)
 
-        if (otherTabsViewingJob.length === 0) {
-          cancelAnalysis(tabId)
-        }
+      if (otherTabsViewingJob.length === 0) {
+        cancelAnalysis(tabId)
       }
+    }
 
       // Fast path: same job already loaded, nothing to do.
       if (current && current.hydratedJobId === jobId) {
