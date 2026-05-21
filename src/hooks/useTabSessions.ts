@@ -249,23 +249,21 @@ export function useTabSessions(
     // task from breaking all future sync updates in the promise chain.
     const prev = syncMutexRef.current.get(tabId) ?? Promise.resolve()
     const run = (async () => {
-      try {
-        await prev
-      } catch {}
+    try {
+      await prev
+    } catch {}
 
-      const current = sessionsRef.current.get(tabId)
-      const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
+    let tabUrl: string | undefined
+    try {
+      const tab = await chrome.tabs.get(tabId)
+      tabUrl = tab.url
+    } catch {
+      return // tab closed during the await
+    }
 
-      let tabUrl: string | undefined
-      try {
-        const tab = await chrome.tabs.get(tabId)
-        tabUrl = tab.url
-      } catch {
-        return // tab closed during the await
-      }
-
-      const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
-
+    const current = sessionsRef.current.get(tabId)
+    const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
+    const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
       // URL change while mid-run — only cancel if the job actually changed
       // (e.g. not just tracking params or hash fragment updates).
       if (midRun && opts.fromUrlChange && current?.hydratedJobId !== jobId) {
