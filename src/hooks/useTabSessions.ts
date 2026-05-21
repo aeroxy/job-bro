@@ -150,6 +150,7 @@ export function useTabSessions(
   // view on one tab updates the other tab's sidepanel to match).
   const updateSessionAndRender = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
+    const oldJobId = session.job?.job_id || session.hydratedJobId
     const newJobId = updateJobIdMapping(tabId, session, patch)
 
     const updated = { ...session, ...patch }
@@ -157,8 +158,9 @@ export function useTabSessions(
     
     let shouldRerender = tabId === activeTabIdRef.current
 
-    if (newJobId) {
-      const siblings = jobIdToTabIdsRef.current.get(newJobId)
+    const targetJobId = newJobId || oldJobId
+    if (targetJobId) {
+      const siblings = jobIdToTabIdsRef.current.get(targetJobId)
       if (siblings) {
         for (const tId of siblings) {
           if (tId === tabId) continue
