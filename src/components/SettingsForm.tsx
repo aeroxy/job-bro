@@ -329,6 +329,26 @@ export function SettingsForm({
                     {config.stream_mode ? 'Max inactivity between chunks' : 'Not used without stream mode'}
                   </p>
                 </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Concurrency</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10}
+                    placeholder="2"
+                    value={config.concurrency ?? ''}
+                    onChange={(e) =>
+                      setConfig((p) => ({
+                        ...p,
+                        concurrency: e.target.value ? Number(e.target.value) : undefined,
+                      }))
+                    }
+                    className="text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Max parallel calls to this provider
+                  </p>
+                </div>
               </div>
             </div>
           </div>
