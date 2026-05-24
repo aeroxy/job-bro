@@ -25,9 +25,6 @@ export default defineContentScript({
 
     window.addEventListener('popstate', broadcastIfChanged)
 
-    await injectScript('/spa-tracker.js', { keepInDom: true })
-    window.addEventListener('job-bro-url-change', broadcastIfChanged)
-
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type !== 'EXTRACT_JD') return false
       ;(async () => {
@@ -51,5 +48,12 @@ export default defineContentScript({
       })()
       return true
     })
+
+    try {
+      await injectScript('/spa-tracker.js', { keepInDom: true })
+      window.addEventListener('job-bro-url-change', broadcastIfChanged)
+    } catch (e) {
+      console.warn('[Job Bro] Failed to inject SPA tracker:', e)
+    }
   },
 })

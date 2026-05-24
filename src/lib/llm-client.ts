@@ -19,20 +19,36 @@ interface ChatCompletionResponse {
 // Keyed by base_url to ensure limits apply across multiple evaluator runs.
 class RequestQueue {
   private active = 0
-  private waiting: (() => void)[] = []
+  private waiting: { limit: number; resolve: () => void }[] = []
 
   async run<T>(concurrency: number, fn: () => Promise<T>): Promise<T> {
     const limit = Math.max(1, concurrency)
     if (this.active >= limit) {
-      await new Promise<void>((resolve) => this.waiting.push(resolve))
+      await new Promise<void>((resolve) => {
+        this.waiting.push({ limit, resolve })
+      })
+    } else {
+      this.active++
     }
-    this.active++
+
     try {
       return await fn()
     } finally {
       this.active--
-      const next = this.waiting.shift()
-      next?.()
+      this.processQueue()
+    }
+  }
+
+  private processQueue() {
+    while (this.waiting.length > 0) {
+      const { limit, resolve } = this.waiting[0]
+      if (this.active < limit) {
+        this.active++
+        this.waiting.shift()
+        resolve()
+      } else {
+        break
+      }
     }
   }
 }
