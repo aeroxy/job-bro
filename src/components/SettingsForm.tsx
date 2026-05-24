@@ -340,7 +340,7 @@ export function SettingsForm({
                     onChange={(e) =>
                       setConfig((p) => ({
                         ...p,
-                        concurrency: e.target.value ? Number(e.target.value) : undefined,
+                        concurrency: e.target.value ? (Number(e.target.value) || undefined) : undefined,
                       }))
                     }
                     className="text-xs"
