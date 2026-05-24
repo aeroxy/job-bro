@@ -6,6 +6,13 @@ const analysisControllers = new Map<number, AbortController>()
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
+  chrome.runtime.onInstalled.addListener((details) => {
+    console.log('[Job Bro] Extension installed or updated:', details.reason)
+    if (details.reason === 'update' || details.reason === 'install') {
+      // Optional: Logic to re-inject scripts into open tabs could go here
+    }
+  })
+
   // Clean up controllers when tabs are closed
   chrome.tabs.onRemoved.addListener((tabId) => {
     const controller = analysisControllers.get(tabId)
