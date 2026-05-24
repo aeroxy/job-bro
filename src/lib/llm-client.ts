@@ -40,14 +40,13 @@ class RequestQueue {
   }
 
   private processQueue() {
-    while (this.waiting.length > 0) {
-      const { limit, resolve } = this.waiting[0]
+    for (let i = 0; i < this.waiting.length; i++) {
+      const { limit, resolve } = this.waiting[i]
       if (this.active < limit) {
         this.active++
-        this.waiting.shift()
+        this.waiting.splice(i, 1)
         resolve()
-      } else {
-        break
+        i-- // Adjust index after removal
       }
     }
   }
