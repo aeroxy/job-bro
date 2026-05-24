@@ -112,7 +112,7 @@ export function ResumeView({
       </div>
 
       {/* Feedback + actions footer */}
-      {!isGenerating && (markdown || (error && !error.includes('aborted') && !error.includes('stopped') && !error.includes('closed'))) && (
+      {!isGenerating && (markdown || error) && (
         <footer className="border-t p-3 space-y-2">
           {/* Feedback form — unmounts during generation, so no manual reset needed */}
           <form
