@@ -8,7 +8,16 @@ export default defineContentScript({
     console.log('[Job Bro] Content script loaded on', location.href)
 
     let lastUrl = location.href
+    const isContextValid = () => !!chrome.runtime?.id
+
     const broadcastIfChanged = () => {
+      if (!isContextValid()) {
+        console.warn('[Job Bro] Extension context invalidated. Stopping content script listeners.')
+        window.removeEventListener('popstate', broadcastIfChanged)
+        window.removeEventListener('job-bro-url-change', broadcastIfChanged)
+        return
+      }
+
       if (location.href === lastUrl) return
       lastUrl = location.href
       chrome.runtime.sendMessage({ type: 'URL_CHANGED', url: lastUrl }).catch(() => {})
