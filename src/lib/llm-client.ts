@@ -107,7 +107,7 @@ export async function chatCompletion(
 
     for (let attempt = 0; attempt <= 2; attempt++) {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), timeoutMs)
+      const timeout = setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), timeoutMs)
 
       try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' }

@@ -201,7 +201,7 @@ export function useTabSessions(
 
     for (const tId of toCancel) {
       cancelledRef.current.add(tId)
-      localControllersRef.current.get(tId)?.abort()
+      localControllersRef.current.get(tId)?.abort(new DOMException('User stopped analysis', 'AbortError'))
       localControllersRef.current.delete(tId)
       chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId: tId }).catch(() => {})
     }
@@ -423,8 +423,9 @@ export function useTabSessions(
       }
 
       sessionsRef.current.delete(tabId)
-      cancelledRef.current.delete(tabId)
-      localControllersRef.current.get(tabId)?.abort()
+      // Mark as cancelled before aborting so siblings don't treat it as a real error
+      cancelledRef.current.add(tabId)
+      localControllersRef.current.get(tabId)?.abort(new DOMException('Tab was closed', 'AbortError'))
       localControllersRef.current.delete(tabId)
       syncMutexRef.current.delete(tabId)
     }
@@ -683,8 +684,14 @@ export function useTabSessions(
       resumeSummary: null,
     })
 
+    // Abort any in-flight resume generation for this tab
+    localControllersRef.current.get(tabId)?.abort(new DOMException('New resume generation started', 'AbortError'))
+    const controller = new AbortController()
+    localControllersRef.current.set(tabId, controller)
+
     if (backendRef.current === 'chrome-prompt') {
-      const result = await runResume(job, analysisContext, undefined, undefined, undefined, session.qnaHistory)
+      const result = await runResume(job, analysisContext, undefined, undefined, undefined, session.qnaHistory, controller.signal)
+      if (cancelledRef.current.has(tabId)) return
       if (result.ok) {
         updateSessionAndRender(tabId, {
           resumeMarkdown: result.markdown,
@@ -695,6 +702,7 @@ export function useTabSessions(
       } else {
         updateSessionAndRender(tabId, { resumeError: result.error, resumeStatus: 'error' })
       }
+      localControllersRef.current.delete(tabId)
       return
     }
 
@@ -703,6 +711,8 @@ export function useTabSessions(
         type: 'GENERATE_RESUME',
         payload: { job, analysisContext, qnaHistory: session.qnaHistory },
       })
+
+      if (cancelledRef.current.has(tabId)) return
 
       if (response.type === 'RESUME_RESULT') {
         updateSessionAndRender(tabId, {
@@ -718,10 +728,13 @@ export function useTabSessions(
         })
       }
     } catch (e) {
+      if (cancelledRef.current.has(tabId)) return
       updateSessionAndRender(tabId, {
         resumeError: (e as Error).message,
         resumeStatus: 'error',
       })
+    } finally {
+      localControllersRef.current.delete(tabId)
     }
   }, [updateSessionAndRender, getSession, persistSession])
 
@@ -736,6 +749,11 @@ export function useTabSessions(
       resumeError: null,
     })
 
+    // Abort any in-flight resume generation for this tab
+    localControllersRef.current.get(tabId)?.abort(new DOMException('Resume regeneration started', 'AbortError'))
+    const controller = new AbortController()
+    localControllersRef.current.set(tabId, controller)
+
     if (backendRef.current === 'chrome-prompt') {
       const result = await runResume(
         job,
@@ -744,7 +762,9 @@ export function useTabSessions(
         session.resumeSummary ?? undefined,
         comment.trim() || undefined,
         session.qnaHistory,
+        controller.signal,
       )
+      if (cancelledRef.current.has(tabId)) return
       if (result.ok) {
         updateSessionAndRender(tabId, {
           resumeMarkdown: result.markdown,
@@ -755,6 +775,7 @@ export function useTabSessions(
       } else {
         updateSessionAndRender(tabId, { resumeError: result.error, resumeStatus: 'error' })
       }
+      localControllersRef.current.delete(tabId)
       return
     }
 
@@ -770,6 +791,8 @@ export function useTabSessions(
         },
       })
 
+      if (cancelledRef.current.has(tabId)) return
+
       if (response.type === 'RESUME_RESULT') {
         updateSessionAndRender(tabId, {
           resumeMarkdown: response.payload.markdown,
@@ -784,10 +807,13 @@ export function useTabSessions(
         })
       }
     } catch (e) {
+      if (cancelledRef.current.has(tabId)) return
       updateSessionAndRender(tabId, {
         resumeError: (e as Error).message,
         resumeStatus: 'error',
       })
+    } finally {
+      localControllersRef.current.delete(tabId)
     }
   }, [updateSessionAndRender, getSession, persistSession])
 

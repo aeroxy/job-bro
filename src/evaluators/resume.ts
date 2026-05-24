@@ -51,7 +51,8 @@ export async function runResumeGenerator(
   previousResume?: string,
   previousSummary?: string,
   comment?: string,
-  qnaHistory?: ChatTurn[]
+  qnaHistory?: ChatTurn[],
+  signal?: AbortSignal,
 ): Promise<ResumeResult> {
   const parts: string[] = [`<jd>\n${jobMarkdown}\n</jd>`]
   if (profile.resume.trim()) parts.push(`<resume>\n${profile.resume.trim()}\n</resume>`)
@@ -66,7 +67,7 @@ export async function runResumeGenerator(
   if (comment) parts.push(`<feedback>\n${comment.trim()}\n</feedback>`)
 
   const messages = buildMessages(customPrompt, SYSTEM_PROMPT, parts.join('\n\n'))
-  const options = { json_mode: true, max_tokens: 4000 } as const
+  const options = { json_mode: true, max_tokens: 4000, signal } as const
 
   const raw = await chatCompletion(config, messages, options)
 
