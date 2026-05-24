@@ -40,5 +40,11 @@ export default defineConfig({
     side_panel: {
       default_path: 'sidepanel/index.html',
     },
+    web_accessible_resources: [
+      {
+        resources: ['spa-tracker.js'],
+        matches: ['*://*.linkedin.com/*'],
+      },
+    ],
   },
 })
