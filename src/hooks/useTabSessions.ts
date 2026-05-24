@@ -609,6 +609,8 @@ export function useTabSessions(
       error: null,
       progress: { ...INITIAL_PROGRESS },
       resumeStatus: 'idle',
+      resumeMarkdown: null,
+      resumeSummary: null,
       resumeError: null,
     })
     // Persist so a stopped run isn't later mistaken for an interrupted one.
