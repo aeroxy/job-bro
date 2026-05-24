@@ -103,6 +103,9 @@ export function useTabSessions(
   // Per-tab mutex: chains concurrent syncTab() calls for the same tab so they
   // run sequentially, preventing race conditions on session state.
   const syncMutexRef = useRef(new Map<number, Promise<void>>())
+  // Per-job analysis lock: ensures only one analysis runs at a time for a given job ID,
+  // even across multiple tabs. Subsequent calls return the in-flight promise.
+  const analysisPromisesRef = useRef(new Map<string, Promise<AggregatedReport | null>>())
 
   // Helper: get or create a session for a tab
   const getSession = useCallback((tabId: number): TabSession => {
@@ -553,25 +556,44 @@ export function useTabSessions(
     const tabId = activeTabIdRef.current
     if (!tabId) return null
 
-    cancelledRef.current.delete(tabId)
-    updateSessionAndRender(tabId, {
-      job: extractedJob,
-      status: 'analyzing',
-      error: null,
-      report: null,
-      progress: { ...INITIAL_PROGRESS },
-    })
-    // Persist the analyzing state BEFORE kicking off the run so an interrupted
-    // run (panel closed mid-analyze) is guaranteed to be recoverable on rehydrate.
-    try {
-      await persistSession(tabId)
-    } catch (e) {
-      console.error('[Job Bro] Failed to persist initial analysis state:', e)
+    const jobId = extractedJob.job_id
+    if (jobId) {
+      const existing = analysisPromisesRef.current.get(jobId)
+      if (existing) return existing
     }
 
-    return backendRef.current === 'chrome-prompt'
-      ? runLocalAnalysis(tabId, extractedJob)
-      : runRemoteAnalysis(tabId, extractedJob)
+    const run = (async () => {
+      cancelledRef.current.delete(tabId)
+      updateSessionAndRender(tabId, {
+        job: extractedJob,
+        status: 'analyzing',
+        error: null,
+        report: null,
+        progress: { ...INITIAL_PROGRESS },
+      })
+      // Persist the analyzing state BEFORE kicking off the run so an interrupted
+      // run (panel closed mid-analyze) is guaranteed to be recoverable on rehydrate.
+      try {
+        await persistSession(tabId)
+      } catch (e) {
+        console.error('[Job Bro] Failed to persist initial analysis state:', e)
+      }
+
+      return backendRef.current === 'chrome-prompt'
+        ? runLocalAnalysis(tabId, extractedJob)
+        : runRemoteAnalysis(tabId, extractedJob)
+    })()
+
+    if (jobId) {
+      analysisPromisesRef.current.set(jobId, run)
+      run.finally(() => {
+        if (analysisPromisesRef.current.get(jobId) === run) {
+          analysisPromisesRef.current.delete(jobId)
+        }
+      })
+    }
+
+    return run
   }, [updateSessionAndRender, persistSession, runLocalAnalysis, runRemoteAnalysis])
 
   const stop = useCallback(() => {
