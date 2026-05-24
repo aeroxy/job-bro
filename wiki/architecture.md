@@ -101,3 +101,19 @@ Sessions are hydrated automatically when the active tab matches a LinkedIn `/job
 ## Content Script Injection
 
 The content script (`content.ts`) is declared in `wxt.config.ts` to match `*://www.linkedin.com/jobs/*`. If it hasn't loaded when the user clicks extract, the background worker injects it programmatically via `chrome.scripting.executeScript`.
+
+## LLM Execution Context
+
+| Backend | Runs In | Why |
+|---------|---------|-----|
+| External HTTP | Service worker | Fetch works reliably; no lifecycle issues |
+| Chrome AI | Sidepanel window | `LanguageModel` API unavailable in service workers |
+
+Chrome's built-in `LanguageModel` (Gemini Nano) requires a window context.
+The MV3 service worker does not expose this API. Additionally, the 5-minute
+worker lifecycle could interrupt long-running LLM evaluations.
+
+The shared orchestrator (`llm-handlers.ts`) is pure TypeScript and runs in
+either context — chosen per request by `LLMConfig.backend`. The Chrome backend
+bypasses all IPC messaging and calls `runAnalysis()`/`runResume()` directly
+from the sidepanel.
