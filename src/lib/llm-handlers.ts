@@ -79,6 +79,7 @@ export async function runResume(
   previousSummary?: string,
   comment?: string,
   qnaHistory?: ChatTurn[],
+  signal?: AbortSignal,
 ): Promise<ResumeResult> {
   const loaded = await loadConfigAndProfile()
   if (!loaded.ok) return loaded
@@ -95,6 +96,7 @@ export async function runResume(
       previousSummary,
       comment,
       qnaHistory,
+      signal,
     )
     return { ok: true, markdown: result.resume, summary: result.summary }
   } catch (e) {
