@@ -22,7 +22,7 @@ class RequestQueue {
   private waiting: { limit: number; resolve: () => void }[] = []
 
   async run<T>(concurrency: number, fn: () => Promise<T>): Promise<T> {
-    const limit = Math.max(1, concurrency)
+    const limit = Math.max(1, Number.isFinite(concurrency) ? concurrency : 2)
     if (this.active >= limit) {
       await new Promise<void>((resolve) => {
         this.waiting.push({ limit, resolve })
