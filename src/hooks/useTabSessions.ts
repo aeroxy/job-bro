@@ -8,6 +8,7 @@ import type { AnalysisProgressMessage } from '@/types/messages'
 import { deleteSession, getSessionByJobId, saveSession } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
 import { runAnalysis, runResume } from '@/lib/llm-handlers'
+import type { ResumeResult } from '@/lib/llm-handlers'
 
 export type AnalysisStatus = 'idle' | 'hydrating' | 'extracting' | 'analyzing' | 'done' | 'error'
 export type ResumeStatus = 'idle' | 'generating' | 'done' | 'error'
@@ -279,10 +280,10 @@ export function useTabSessions(
       // Synchronous reset before async IDB fetch — kills stale content immediately.
       // Note: We MUST call updateJobIdMapping before overwriting sessionsRef to 
       // ensure the old jobId is correctly identified and cleaned up from the mapping.
-      const resetSession = {
+      const resetSession: TabSession = {
         ...DEFAULT_SESSION,
         progress: { ...INITIAL_PROGRESS },
-        status: jobId ? 'hydrating' : 'idle',
+        status: (jobId ? 'hydrating' : 'idle') as AnalysisStatus,
       }
       if (current) {
         updateJobIdMapping(tabId, current, resetSession)
@@ -344,8 +345,8 @@ export function useTabSessions(
           qnaHistory: persisted.qnaHistory,
           resumeMarkdown: persisted.resumeMarkdown,
           resumeSummary: persisted.resumeSummary,
-          resumeStatus: persisted.resumeMarkdown ? 'done' : 'idle',
-          status: wasInterrupted ? 'error' : persisted.report ? 'done' : 'idle',
+          resumeStatus: (persisted.resumeMarkdown ? 'done' : 'idle') as ResumeStatus,
+          status: (wasInterrupted ? 'error' : persisted.report ? 'done' : 'idle') as AnalysisStatus,
           progress: persisted.report ? { ...COMPLETED_PROGRESS } : { ...INITIAL_PROGRESS },
           error: wasInterrupted
             ? 'Previous analysis was interrupted. Click Analyze to retry.'
@@ -607,6 +608,8 @@ export function useTabSessions(
       status: 'idle',
       error: null,
       progress: { ...INITIAL_PROGRESS },
+      resumeStatus: 'idle',
+      resumeError: null,
     })
     // Persist so a stopped run isn't later mistaken for an interrupted one.
     persistSession(tabId).catch(() => {})
@@ -632,6 +635,10 @@ export function useTabSessions(
       progress: { ...INITIAL_PROGRESS },
       qnaHistory: [],
       hydratedJobId: null,
+      resumeStatus: 'idle',
+      resumeMarkdown: null,
+      resumeSummary: null,
+      resumeError: null,
     })
     if (jobId) deleteSession(jobId).catch(() => {})
   }, [cancelAnalysis, updateSessionAndRender])
@@ -686,12 +693,29 @@ export function useTabSessions(
 
     // Abort any in-flight resume generation for this tab
     localControllersRef.current.get(tabId)?.abort(new DOMException('New resume generation started', 'AbortError'))
+    cancelledRef.current.delete(tabId)
     const controller = new AbortController()
     localControllersRef.current.set(tabId, controller)
 
-    if (backendRef.current === 'chrome-prompt') {
-      const result = await runResume(job, analysisContext, undefined, undefined, undefined, session.qnaHistory, controller.signal)
+    try {
+      let result: ResumeResult
+      if (backendRef.current === 'chrome-prompt') {
+        result = await runResume(job, analysisContext, undefined, undefined, undefined, session.qnaHistory, controller.signal)
+      } else {
+        const response = await chrome.runtime.sendMessage({
+          type: 'GENERATE_RESUME',
+          payload: { job, analysisContext, qnaHistory: session.qnaHistory },
+        })
+        if (response.type === 'RESUME_RESULT') {
+          result = { ok: true, markdown: response.payload.markdown, summary: response.payload.summary }
+        } else {
+          result = { ok: false, error: response.error || 'Resume generation failed' }
+        }
+      }
+
+      if (localControllersRef.current.get(tabId) !== controller) return // Superseded by a newer run
       if (cancelledRef.current.has(tabId)) return
+
       if (result.ok) {
         updateSessionAndRender(tabId, {
           resumeMarkdown: result.markdown,
@@ -702,39 +726,17 @@ export function useTabSessions(
       } else {
         updateSessionAndRender(tabId, { resumeError: result.error, resumeStatus: 'error' })
       }
-      localControllersRef.current.delete(tabId)
-      return
-    }
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'GENERATE_RESUME',
-        payload: { job, analysisContext, qnaHistory: session.qnaHistory },
-      })
-
-      if (cancelledRef.current.has(tabId)) return
-
-      if (response.type === 'RESUME_RESULT') {
-        updateSessionAndRender(tabId, {
-          resumeMarkdown: response.payload.markdown,
-          resumeSummary: response.payload.summary,
-          resumeStatus: 'done',
-        })
-        await persistSession(tabId)
-      } else {
-        updateSessionAndRender(tabId, {
-          resumeError: response.error || 'Resume generation failed',
-          resumeStatus: 'error',
-        })
-      }
     } catch (e) {
-      if (cancelledRef.current.has(tabId)) return
+      if (localControllersRef.current.get(tabId) !== controller) return
+      if (cancelledRef.current.has(tabId) || (e as Error).name === 'AbortError') return
       updateSessionAndRender(tabId, {
         resumeError: (e as Error).message,
         resumeStatus: 'error',
       })
     } finally {
-      localControllersRef.current.delete(tabId)
+      if (localControllersRef.current.get(tabId) === controller) {
+        localControllersRef.current.delete(tabId)
+      }
     }
   }, [updateSessionAndRender, getSession, persistSession])
 
@@ -751,20 +753,43 @@ export function useTabSessions(
 
     // Abort any in-flight resume generation for this tab
     localControllersRef.current.get(tabId)?.abort(new DOMException('Resume regeneration started', 'AbortError'))
+    cancelledRef.current.delete(tabId)
     const controller = new AbortController()
     localControllersRef.current.set(tabId, controller)
 
-    if (backendRef.current === 'chrome-prompt') {
-      const result = await runResume(
-        job,
-        undefined,
-        session.resumeMarkdown ?? undefined,
-        session.resumeSummary ?? undefined,
-        comment.trim() || undefined,
-        session.qnaHistory,
-        controller.signal,
-      )
+    try {
+      let result: ResumeResult
+      if (backendRef.current === 'chrome-prompt') {
+        result = await runResume(
+          job,
+          undefined,
+          session.resumeMarkdown ?? undefined,
+          session.resumeSummary ?? undefined,
+          comment.trim() || undefined,
+          session.qnaHistory,
+          controller.signal,
+        )
+      } else {
+        const response = await chrome.runtime.sendMessage({
+          type: 'GENERATE_RESUME',
+          payload: {
+            job,
+            previousResume: session.resumeMarkdown ?? undefined,
+            previousSummary: session.resumeSummary ?? undefined,
+            comment: comment.trim() || undefined,
+            qnaHistory: session.qnaHistory,
+          },
+        })
+        if (response.type === 'RESUME_RESULT') {
+          result = { ok: true, markdown: response.payload.markdown, summary: response.payload.summary }
+        } else {
+          result = { ok: false, error: response.error || 'Resume generation failed' }
+        }
+      }
+
+      if (localControllersRef.current.get(tabId) !== controller) return // Superseded by a newer run
       if (cancelledRef.current.has(tabId)) return
+
       if (result.ok) {
         updateSessionAndRender(tabId, {
           resumeMarkdown: result.markdown,
@@ -775,45 +800,17 @@ export function useTabSessions(
       } else {
         updateSessionAndRender(tabId, { resumeError: result.error, resumeStatus: 'error' })
       }
-      localControllersRef.current.delete(tabId)
-      return
-    }
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'GENERATE_RESUME',
-        payload: {
-          job,
-          previousResume: session.resumeMarkdown ?? undefined,
-          previousSummary: session.resumeSummary ?? undefined,
-          comment: comment.trim() || undefined,
-          qnaHistory: session.qnaHistory,
-        },
-      })
-
-      if (cancelledRef.current.has(tabId)) return
-
-      if (response.type === 'RESUME_RESULT') {
-        updateSessionAndRender(tabId, {
-          resumeMarkdown: response.payload.markdown,
-          resumeSummary: response.payload.summary,
-          resumeStatus: 'done',
-        })
-        await persistSession(tabId)
-      } else {
-        updateSessionAndRender(tabId, {
-          resumeError: response.error || 'Resume generation failed',
-          resumeStatus: 'error',
-        })
-      }
     } catch (e) {
-      if (cancelledRef.current.has(tabId)) return
+      if (localControllersRef.current.get(tabId) !== controller) return
+      if (cancelledRef.current.has(tabId) || (e as Error).name === 'AbortError') return
       updateSessionAndRender(tabId, {
         resumeError: (e as Error).message,
         resumeStatus: 'error',
       })
     } finally {
-      localControllersRef.current.delete(tabId)
+      if (localControllersRef.current.get(tabId) === controller) {
+        localControllersRef.current.delete(tabId)
+      }
     }
   }, [updateSessionAndRender, getSession, persistSession])
 
