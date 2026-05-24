@@ -12,7 +12,8 @@
 7. content.ts runs extractJob() (DOM parsing)
 8. Returns JD_EXTRACTED { job: ExtractedJob } → background → sidepanel
 9. Sidepanel renders JobSummaryCard, awaits user confirmation
-10. User clicks "Analyze" → ANALYZE_JD → background.ts
+10. User clicks "Analyze" → ANALYZE_JD → background.ts (deduplication: if same
+    job_id is already in-flight across tabs, the existing promise is reused)
 11. background calls runAllEvaluators(job, profile, config, customPrompt, onProgress)
 12. 5 LLM evaluators run in parallel (Promise.all)
 13. Each evaluator calls onProgress() → background sends ANALYSIS_PROGRESS → sidepanel
@@ -112,7 +113,9 @@ This applies to **all 5 evaluators** and the resume generator.
 
 ## Error Handling
 
-- **Evaluator failure:** Wrapped in `runWithTracking`. If an evaluator throws, its `EvaluatorStatus` is set to `{ status: "rejected", reason: ... }`. Aggregator skips it and adjusts weighted total accordingly.
+- **Duplicate analysis (same job_id):** analyze() returns the existing in-flight
+  promise. This prevents redundant API calls when the user clicks "Analyze" on
+  multiple tabs viewing the same job.
 - **LLM validation failure:** `runWithValidation` retries once with the validation error in context.
 - **HTTP errors:** Retried on 429/5xx with 1s → 3s delays.
 - **Extraction failure:** Content script returns `JD_EXTRACTION_FAILED`; sidepanel shows error state.
