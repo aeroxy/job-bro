@@ -135,8 +135,8 @@ export function useTabSessions(
   // Helper: update a session and re-render if it's the active tab
   const updateSession = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
-    updateJobIdMapping(tabId, session, patch)
-    sessionsRef.current.set(tabId, { ...session, ...patch })
+    const newJobId = updateJobIdMapping(tabId, session, patch)
+    sessionsRef.current.set(tabId, { ...session, ...patch, hydratedJobId: newJobId ?? null })
   }, [updateJobIdMapping])
 
   // Keep a ref to activeTabId so we can check it in callbacks
@@ -153,7 +153,7 @@ export function useTabSessions(
     const oldJobId = session.job?.job_id || session.hydratedJobId
     const newJobId = updateJobIdMapping(tabId, session, patch)
 
-    const updated = { ...session, ...patch }
+    const updated = { ...session, ...patch, hydratedJobId: newJobId ?? null }
     sessionsRef.current.set(tabId, updated)
     
     let shouldRerender = tabId === activeTabIdRef.current
@@ -166,7 +166,7 @@ export function useTabSessions(
           if (tId === tabId) continue
           const s = sessionsRef.current.get(tId)
           if (s) {
-            sessionsRef.current.set(tId, { ...s, ...patch })
+            sessionsRef.current.set(tId, { ...s, ...patch, hydratedJobId: newJobId ?? null })
             if (tId === activeTabIdRef.current) {
               shouldRerender = true
             }
