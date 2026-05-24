@@ -15,6 +15,39 @@ interface ChatCompletionResponse {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
 }
 
+// Per-provider request queue to respect concurrency limits.
+// Keyed by base_url to ensure limits apply across multiple evaluator runs.
+class RequestQueue {
+  private active = 0
+  private waiting: (() => void)[] = []
+
+  async run<T>(concurrency: number, fn: () => Promise<T>): Promise<T> {
+    const limit = Math.max(1, concurrency)
+    if (this.active >= limit) {
+      await new Promise<void>((resolve) => this.waiting.push(resolve))
+    }
+    this.active++
+    try {
+      return await fn()
+    } finally {
+      this.active--
+      const next = this.waiting.shift()
+      next?.()
+    }
+  }
+}
+
+const queues = new Map<string, RequestQueue>()
+
+function getQueue(baseUrl: string): RequestQueue {
+  let q = queues.get(baseUrl)
+  if (!q) {
+    q = new RequestQueue()
+    queues.set(baseUrl, q)
+  }
+  return q
+}
+
 export async function chatCompletion(
   config: LLMConfig,
   messages: ChatMessage[],
@@ -28,84 +61,89 @@ export async function chatCompletion(
     })
   }
 
-  if (config.stream_mode) {
-    return streamCompletion(config, messages, options)
-  }
+  const queue = getQueue(config.base_url)
+  const concurrency = config.concurrency ?? 2
 
-  const { temperature = 0.3, max_tokens = 2000, json_mode = true, signal } = options ?? {}
-  const timeoutMs = (config.timeout ?? 30) * 1000
-
-  const body: Record<string, unknown> = {
-    model: config.model,
-    messages,
-    temperature,
-    max_tokens,
-  }
-
-  if (json_mode) {
-    body.response_format = { type: 'json_object' }
-  }
-
-  const baseUrl = config.base_url.trim().replace(/\/+$/, '')
-  if (!baseUrl) throw new Error('LLM base URL is not configured')
-  const url = `${baseUrl}/chat/completions`
-
-  let lastError: Error | null = null
-  const httpRetryDelays = [1000, 3000]
-
-  for (let attempt = 0; attempt <= 2; attempt++) {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
-
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-
-      if (config.api_key) {
-        headers['Authorization'] = `Bearer ${config.api_key}`
-      }
-
-      if (config.custom_headers) {
-        try {
-          Object.assign(headers, JSON.parse(config.custom_headers))
-        } catch {
-          // ignore malformed custom headers
-        }
-      }
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
-      })
-
-      clearTimeout(timeout)
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error')
-        const retryable = [429, 500, 502, 503].includes(response.status)
-
-        if (retryable && attempt < 2) {
-          lastError = new Error(`HTTP ${response.status}: ${errorText}`)
-          await delay(httpRetryDelays[attempt])
-          continue
-        }
-
-        throw new Error(`LLM API error (${response.status}): ${errorText}`)
-      }
-
-      const data: ChatCompletionResponse = await response.json()
-      const content = data.choices?.[0]?.message?.content
-      if (!content) throw new Error('LLM returned empty response')
-
-      return content
-    } catch (e) {
-      clearTimeout(timeout)
-      throw e instanceof Error ? e : new Error(String(e))
+  return queue.run(concurrency, async () => {
+    if (config.stream_mode) {
+      return streamCompletion(config, messages, options)
     }
-  }
 
-  throw lastError ?? new Error('LLM request failed')
+    const { temperature = 0.3, max_tokens = 2000, json_mode = true, signal } = options ?? {}
+    const timeoutMs = (config.timeout ?? 30) * 1000
+
+    const body: Record<string, unknown> = {
+      model: config.model,
+      messages,
+      temperature,
+      max_tokens,
+    }
+
+    if (json_mode) {
+      body.response_format = { type: 'json_object' }
+    }
+
+    const baseUrl = config.base_url.trim().replace(/\/+$/, '')
+    if (!baseUrl) throw new Error('LLM base URL is not configured')
+    const url = `${baseUrl}/chat/completions`
+
+    let lastError: Error | null = null
+    const httpRetryDelays = [1000, 3000]
+
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+        if (config.api_key) {
+          headers['Authorization'] = `Bearer ${config.api_key}`
+        }
+
+        if (config.custom_headers) {
+          try {
+            Object.assign(headers, JSON.parse(config.custom_headers))
+          } catch {
+            // ignore malformed custom headers
+          }
+        }
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+        })
+
+        clearTimeout(timeout)
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unknown error')
+          const retryable = [429, 500, 502, 503].includes(response.status)
+
+          if (retryable && attempt < 2) {
+            lastError = new Error(`HTTP ${response.status}: ${errorText}`)
+            await delay(httpRetryDelays[attempt])
+            continue
+          }
+
+          throw new Error(`LLM API error (${response.status}): ${errorText}`)
+        }
+
+        const data: ChatCompletionResponse = await response.json()
+        const content = data.choices?.[0]?.message?.content
+        if (!content) throw new Error('LLM returned empty response')
+
+        return content
+      } catch (e) {
+        clearTimeout(timeout)
+        throw e instanceof Error ? e : new Error(String(e))
+      }
+    }
+
+    throw lastError ?? new Error('LLM request failed')
+  })
 }
 
 export function parseJSON<T>(raw: string): T {

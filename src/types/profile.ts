@@ -25,6 +25,7 @@ export interface LLMConfig {
   stream_mode?: boolean
   timeout?: number        // non-stream request timeout in seconds (default 30)
   stream_timeout?: number // per-chunk inactivity timeout in seconds (default 60)
+  concurrency?: number    // max concurrent calls for this provider (default 2)
 }
 
 export interface LLMProfile {
