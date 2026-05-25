@@ -418,7 +418,7 @@ export function useTabSessions(
 
       // If the closed tab was mid-analysis, transition sibling tabs to idle
       // so they don't stay stuck in 'analyzing' indefinitely.
-      if (jobId && (session.status === 'analyzing' || session.status === 'extracting')) {
+      if (jobId && (session?.status === 'analyzing' || session?.status === 'extracting')) {
         const siblings = jobIdToTabIdsRef.current.get(jobId)
         if (siblings) {
           let shouldRerender = false
@@ -427,6 +427,7 @@ export function useTabSessions(
             const s = sessionsRef.current.get(tId)
             if (s && (s.status === 'analyzing' || s.status === 'extracting')) {
               sessionsRef.current.set(tId, { ...s, status: 'idle', progress: { ...INITIAL_PROGRESS } })
+              persistSession(tId).catch(() => {})
               if (tId === activeTabIdRef.current) shouldRerender = true
             }
           }
@@ -703,7 +704,6 @@ export function useTabSessions(
   // differing dispatch logic.
   const runResumeGeneration = useCallback(async (
     tabId: number,
-    session: TabSession,
     initialPatch: Partial<TabSession>,
     work: (signal: AbortSignal) => Promise<ResumeResult>,
   ) => {
@@ -749,7 +749,7 @@ export function useTabSessions(
     if (!tabId) return
     const session = getSession(tabId)
 
-    await runResumeGeneration(tabId, session, {
+    await runResumeGeneration(tabId, {
       resumeStatus: 'generating',
       resumeError: null,
       resumeMarkdown: null,
@@ -773,7 +773,7 @@ export function useTabSessions(
     if (!tabId) return
     const session = getSession(tabId)
 
-    await runResumeGeneration(tabId, session, {
+    await runResumeGeneration(tabId, {
       resumeStatus: 'generating',
       resumeError: null,
     }, async (signal) => {
