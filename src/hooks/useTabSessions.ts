@@ -416,9 +416,12 @@ export function useTabSessions(
       const session = sessionsRef.current.get(tabId)
       const jobId = session?.job?.job_id || session?.hydratedJobId
 
-      // If the closed tab was mid-analysis, transition sibling tabs to idle
-      // so they don't stay stuck in 'analyzing' indefinitely.
-      if (jobId && (session?.status === 'analyzing' || session?.status === 'extracting')) {
+      // If the closed tab was the analysis initiator, transition sibling tabs
+      // to idle so they don't stay stuck in 'analyzing' indefinitely. Only
+      // trigger when the closed tab owns the AbortController (i.e. it was the
+      // one that started runLocalAnalysis), not when a follower tab is closed.
+      const ownsController = localControllersRef.current.has(tabId)
+      if (jobId && ownsController && (session?.status === 'analyzing' || session?.status === 'extracting')) {
         const siblings = jobIdToTabIdsRef.current.get(jobId)
         if (siblings) {
           let shouldRerender = false
