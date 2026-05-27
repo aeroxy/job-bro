@@ -47,6 +47,36 @@
 
 ---
 
+## Resume / Analysis Cancellation
+
+```
+1. User clicks "Cancel" on an in-progress resume generation or analysis
+2. useTabSessions calls localResumeControllersRef.abort(tabId) (Chrome backend)
+   or localAnalysisControllersRef.abort(tabId)
+3. CANCEL_RESUME (or CANCEL_ANALYSIS) message sent to background worker
+4. background.ts looks up the tabId in resumeControllers (or analysisControllers)
+5. Calls controller.abort(new DOMException('User stopped resume generation', 'AbortError'))
+6. Controller deleted from Map
+7. LLM handler (runResume / runAnalysis) receives AbortError → returns error result
+8. UI state updated to 'idle'; feedback footer always displayed (no string-matching filtering)
+```
+
+---
+
+## Cross-Tab Synchronization
+
+```
+1. Tab A and Tab B are both viewing the same job_id
+2. Tab A starts resume generation (or analysis)
+3. Tab A is closed (or user cancels)
+4. chrome.tabs.onRemoved fires in background → aborts controller with "Tab was closed"
+5. onTabRemoved callbacks fire in useTabSessions for sibling tabs
+6. Sibling tabs viewing the same job_id reset to idle state
+7. No frozen or stuck loading states in remaining tabs
+```
+
+---
+
 ## Settings & Profile
 
 ```

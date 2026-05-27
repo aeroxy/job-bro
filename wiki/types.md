@@ -183,3 +183,30 @@ interface ChatTurn {
 ## Message Types (`messages.ts`)
 
 IPC payloads for `chrome.runtime.sendMessage`. See [architecture.md](architecture.md) for full message flow table.
+
+```ts
+type GenerateResumeMessage = {
+  type: 'GENERATE_RESUME'
+  tabId: number
+  payload: {
+    job: ExtractedJob
+    analysisContext?: string
+    previousResume?: string
+    previousSummary?: string
+    comment?: string
+    qnaHistory?: ChatTurn[]
+  }
+}
+
+type CancelResumeMessage = {
+  type: 'CANCEL_RESUME'
+  tabId: number
+}
+
+type CancelAnalysisMessage = {
+  type: 'CANCEL_ANALYSIS'
+  tabId: number
+}
+```
+
+`tabId` is required on `GenerateResumeMessage` so the background worker can map the request to the correct `AbortController` in `resumeControllers`. Both cancel messages carry `tabId` for the same reason.

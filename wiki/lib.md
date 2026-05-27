@@ -55,13 +55,13 @@ Assembles the `messages` array for a chat completion:
 
 ## `chrome-prompt-client.ts`
 
-Adapter for Chrome's built-in `LanguageModel` API (Gemini Nano). **Window-context only** — calling these functions from the MV3 service worker will throw because `LanguageModel` is not exposed there.
+Adapter for Chrome's built-in `LanguageModel` API (Gemini Nano). **Window-context only** — calling these functions from the MV3 service worker will throw because `LanguageModel` is not exposed there. The API is accessed via `globalThis.LanguageModel` (latest Chrome spec).
 
 | Export | Purpose |
 |---|---|
 | `chatCompletionChrome(messages, options)` | Same return contract as `chatCompletion`. Folds all `system` messages into a single concatenated initial prompt; sends prior turns via `initialPrompts`; sends the last user message via `session.prompt()`. JSON mode uses Chrome's `responseConstraint`. Streaming uses `promptStreaming()`. Sessions are created and destroyed per call. |
-| `getChromeAiAvailability()` | Wraps `LanguageModel.availability()` with a try/catch — returns `'unavailable'` if the global is missing. |
-| `ensureChromeAiDownloaded(signal?)` | Triggers a one-shot session create to start (or wait on) the model download. Progress events flow through `onChromeDownloadProgress`. |
+| `getChromeAiAvailability()` | Checks `globalThis.LanguageModel` existence, then wraps `LanguageModel.availability()` with a try/catch — returns `'unavailable'` if the global is missing. |
+| `ensureChromeAiDownloaded(signal?)` | Checks `globalThis.LanguageModel` existence, then triggers a one-shot session create to start (or wait on) the model download. Progress events flow through `onChromeDownloadProgress`. |
 | `onChromeDownloadProgress(listener)` | Subscribe to `downloadprogress` events broadcast from any session created via this module or via `chromeDownloadMonitor()`. Returns an unsubscribe fn. |
 | `chromeDownloadMonitor()` | Returns a `monitor` function suitable for `LanguageModel.create({ monitor })`. Use it from any caller (e.g. the persistent chat session hook) so download progress reaches the same shared listeners. |
 
@@ -76,7 +76,7 @@ Shared orchestration callable from either the background service worker (HTTP ba
 | Export | Returns | Used by |
 |---|---|---|
 | `runAnalysis(job, signal, onProgress?)` | `{ ok: true, report } \| { ok: false, error }` | `background.ts` (cloud), `useTabSessions.analyze` (chrome) |
-| `runResume(job, analysisContext?, previousResume?, previousSummary?, comment?, qnaHistory?)` | `{ ok: true, markdown, summary } \| { ok: false, error }` | `background.ts` (cloud), `useTabSessions.generateResume`/`regenerateResume` (chrome) |
+| `runResume(job, analysisContext?, previousResume?, previousSummary?, comment?, qnaHistory?, signal?)` | `{ ok: true, markdown, summary } \| { ok: false, error }` | `background.ts` (cloud), `useTabSessions.generateResume`/`regenerateResume` (chrome) |
 | `runChat(question, history, jobMarkdown, analysisContext)` | `{ ok: true, answer } \| { ok: false, error }` | `background.ts` (cloud) |
 | `buildChatSystemPrompt(profile, jobMarkdown, analysisContext)` | `string` | `ReportChat` (Chrome chat path uses this with the persistent session hook) |
 

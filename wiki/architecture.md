@@ -63,6 +63,15 @@ User → LinkedIn Job Page
 
 Resume generation and chat Q&A use the same backend dispatch (sidepanel-local for Chrome, background message for cloud). Chat additionally uses a stateful Chrome session via `useChromeChatSession` to avoid re-encoding conversation history on each turn.
 
+### AbortController Tracking
+
+The background worker maintains two `Map<number, AbortController>` instances:
+
+- `analysisControllers` — keyed by `tabId`, aborts via `CANCEL_ANALYSIS` or tab close
+- `resumeControllers` — keyed by `tabId`, aborts via `CANCEL_RESUME` or tab close
+
+When a new request arrives for a tab that already has an in-flight operation, the existing controller is aborted before creating a new one. All `.abort()` calls pass a descriptive `DOMException` (e.g. "Tab was closed", "User stopped analysis") for error traceability. The sidepanel mirrors this with `localAnalysisControllersRef` and `localResumeControllersRef` for Chrome-backend local execution.
+
 ## IPC Message Flow
 
 All communication uses `chrome.runtime.sendMessage`. Message types are defined in `src/types/messages.ts`:
@@ -77,9 +86,11 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `ANALYSIS_PROGRESS` | background → sidepanel | Per-evaluator status update |
 | `ANALYSIS_RESULT` | background → sidepanel | Final `AggregatedReport` |
 | `ANALYSIS_ERROR` | background → sidepanel | Evaluator failure |
-| `GENERATE_RESUME` | sidepanel → background | Trigger resume generation (includes `qnaHistory`) |
+| `GENERATE_RESUME` | sidepanel → background | Trigger resume generation (includes `tabId`, `qnaHistory`) |
+| `CANCEL_RESUME` | sidepanel → background | Abort in-progress resume generation for a tab |
 | `RESUME_RESULT` | background → sidepanel | Markdown resume + changelog |
 | `RESUME_ERROR` | background → sidepanel | Resume generation failure |
+| `CANCEL_ANALYSIS` | sidepanel → background | Abort in-progress analysis for a tab |
 | `CHAT_REQUEST` | sidepanel → background | Follow-up Q&A question |
 | `CHAT_RESPONSE` | background → sidepanel | Q&A answer |
 | `CHAT_ERROR` | background → sidepanel | Q&A failure |

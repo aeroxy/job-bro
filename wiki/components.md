@@ -62,6 +62,34 @@ Persistent Chrome AI session for chat Q&A. Used by `ReportChat` when `useChromeB
 
 The session is created lazily on the first `askChrome` and **rebuilt** when the system prompt changes (different job/analysis) or when `history.length` doesn't match what the session has been told (e.g. after a Retry that drops the last assistant turn). On unmount the session is destroyed.
 
+Chrome's Prompt API is accessed via `globalThis.LanguageModel` (latest spec).
+
+---
+
+### `useTabSessions`
+
+Main hook for managing tab-scoped analysis sessions. Handles session state (analysis reports, chat history, resume generation), tab lifecycle (syncing on navigation, cleaning up on close), and multi-tab job coordination (sharing results between tabs viewing the same job).
+
+**State:** `TabSession` per tab — `view`, `status`, `job`, `report`, `error`, `progress`, `resumeStatus`, `resumeMarkdown`, `resumeSummary`, `resumeError`, `qnaHistory`, `chatLoading`, `chatNonce`, `hydratedJobId`
+
+**AbortController refs:**
+- `localAnalysisControllersRef` — `Map<number, AbortController>` for analysis tasks (Chrome backend)
+- `localResumeControllersRef` — `Map<number, AbortController>` for resume tasks (Chrome backend)
+
+These are kept separate so cancelling a resume doesn't cancel an in-flight analysis, and vice versa.
+
+**Key methods:**
+- `analyze(tabId, job)` — runs `runAllEvaluators` (Chrome backend) or sends `ANALYZE_JD` (cloud backend)
+- `generateResume(tabId, job, analysisContext)` — runs `runResume` locally or sends `GENERATE_RESUME` with `tabId`
+- `regenerateResume(tabId, job, comment)` — re-runs with previous markdown + cumulative changelog
+- `cancelAnalysis(tabId)` — aborts local controller + sends `CANCEL_ANALYSIS` to background
+- `cancelResume(tabId)` — aborts local controller + sends `CANCEL_RESUME` to background
+- `resetResume(tabId)` — clears resume state back to idle
+
+**Cross-tab sync:** When a tab is closed or a process is cancelled, sibling tabs viewing the same `job_id` gracefully reset to `idle` state. The `onTabRemoved` callback set cascades cleanup across all registered listeners.
+
+**Shared generation helper:** `runResumeGeneration()` encapsulates controller lifecycle, deduplication (prevents concurrent generations for the same tab), and error mapping for both generate and regenerate flows.
+
 ---
 
 ### `useHistory`
