@@ -96,6 +96,9 @@ export function useTabSessions(
   // uses CANCEL_ANALYSIS/CANCEL_RESUME messages instead.
   const localAnalysisControllersRef = useRef(new Map<number, AbortController>())
   const localResumeControllersRef = useRef(new Map<number, AbortController>())
+  // Track which tab owns an analysis/resume (for both backends)
+  const analysisOwnerTabRef = useRef(new Map<string, number>())
+  const resumeOwnerTabRef = useRef(new Map<string, number>())
 
   // Track current backend in a ref so callbacks see the latest value without
   // needing to re-create on every config change.
@@ -439,10 +442,14 @@ export function useTabSessions(
 
       // If the closed tab was the initiator, transition sibling tabs
       // to idle so they don't stay stuck indefinitely. Only
-      // trigger when the closed tab owns the AbortController,
-      // not when a follower tab is closed.
-      const ownsAnalysis = localAnalysisControllersRef.current.has(tabId)
-      const ownsResume = localResumeControllersRef.current.has(tabId)
+      // trigger when the closed tab owns the AbortController (local) or
+      // is the registered owner (remote), not when a follower tab is closed.
+      const ownsAnalysisLocal = localAnalysisControllersRef.current.has(tabId)
+      const ownsAnalysisRemote = jobId ? analysisOwnerTabRef.current.get(jobId) === tabId : false
+      const ownsResumeLocal = localResumeControllersRef.current.has(tabId)
+      const ownsResumeRemote = jobId ? resumeOwnerTabRef.current.get(jobId) === tabId : false
+      const ownsAnalysis = ownsAnalysisLocal || ownsAnalysisRemote
+      const ownsResume = ownsResumeLocal || ownsResumeRemote
 
       if (jobId && (ownsAnalysis || ownsResume) && (session?.status === 'analyzing' || session?.status === 'extracting' || session?.resumeStatus === 'generating')) {
         const siblings = jobIdToTabIdsRef.current.get(jobId)
@@ -472,6 +479,13 @@ export function useTabSessions(
         if (set?.size === 0) {
           jobIdToTabIdsRef.current.delete(jobId)
         }
+        // Clean up owner refs if this tab was the owner
+        if (analysisOwnerTabRef.current.get(jobId) === tabId) {
+          analysisOwnerTabRef.current.delete(jobId)
+        }
+        if (resumeOwnerTabRef.current.get(jobId) === tabId) {
+          resumeOwnerTabRef.current.delete(jobId)
+        }
       }
 
       sessionsRef.current.delete(tabId)
@@ -485,7 +499,7 @@ export function useTabSessions(
     }
     onTabRemoved.add(handleRemoved)
     return () => { onTabRemoved.delete(handleRemoved) }
-  }, [onTabRemoved])
+  }, [onTabRemoved, persistSession, rerender])
 
   // Listen for progress updates from background
   useEffect(() => {
@@ -539,7 +553,9 @@ export function useTabSessions(
     tabId: number,
     extractedJob: ExtractedJob,
   ): Promise<AggregatedReport | null> => {
-    localAnalysisControllersRef.current.get(tabId)?.abort()
+    localAnalysisControllersRef.current.get(tabId)?.abort(
+      new DOMException('New analysis started', 'AbortError'),
+    )
     const controller = new AbortController()
     localAnalysisControllersRef.current.set(tabId, controller)
 
@@ -556,6 +572,7 @@ export function useTabSessions(
 
     try {
       const result = await runAnalysis(extractedJob, controller.signal, onProgress)
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
       if (cancelledRef.current.has(tabId)) return null
       if (result.ok) {
         updateSessionAndRender(tabId, { report: result.report, status: 'done' })
@@ -566,12 +583,16 @@ export function useTabSessions(
       await persistSession(tabId)
       return null
     } catch (e) {
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
+      if ((e as Error).name === 'AbortError') return null
       if (cancelledRef.current.has(tabId)) return null
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
       await persistSession(tabId)
       return null
     } finally {
-      localAnalysisControllersRef.current.delete(tabId)
+      if (localAnalysisControllersRef.current.get(tabId) === controller) {
+        localAnalysisControllersRef.current.delete(tabId)
+      }
     }
   }, [updateSessionAndRender, persistSession])
 
@@ -641,9 +662,13 @@ export function useTabSessions(
 
     if (jobId) {
       analysisPromisesRef.current.set(jobId, run)
+      analysisOwnerTabRef.current.set(jobId, tabId)
       run.finally(() => {
         if (analysisPromisesRef.current.get(jobId) === run) {
           analysisPromisesRef.current.delete(jobId)
+        }
+        if (analysisOwnerTabRef.current.get(jobId) === tabId) {
+          analysisOwnerTabRef.current.delete(jobId)
         }
       })
     }
@@ -658,16 +683,15 @@ export function useTabSessions(
     // Cancel analysis and resume generation on this tab and any siblings viewing the same job.
     cancelAnalysis(tabId)
     cancelResume(tabId)
-    const session = sessionsRef.current.get(tabId)
-    const jobId = session?.job?.job_id || session?.hydratedJobId
+    const session = getSession(tabId)
+    const jobId = session.job?.job_id || session.hydratedJobId
 
-    const currentSession = sessionsRef.current.get(tabId)
     updateSessionAndRender(tabId, {
-      status: (currentSession?.status === 'analyzing' || currentSession?.status === 'extracting') ? 'idle' : currentSession?.status,
+      status: (session.status === 'analyzing' || session.status === 'extracting') ? 'idle' : session.status,
       error: null,
-      progress: (currentSession?.status === 'analyzing' || currentSession?.status === 'extracting') ? { ...INITIAL_PROGRESS } : currentSession?.progress,
-      resumeStatus: currentSession?.resumeStatus === 'generating' ? 'idle' : currentSession?.resumeStatus,
-      resumeError: currentSession?.resumeStatus === 'generating' ? null : currentSession?.resumeError,
+      progress: (session.status === 'analyzing' || session.status === 'extracting') ? { ...INITIAL_PROGRESS } : session.progress,
+      resumeStatus: session.resumeStatus === 'generating' ? 'idle' : session.resumeStatus,
+      resumeError: session.resumeStatus === 'generating' ? null : session.resumeError,
     })
     // Persist so a stopped run isn't later mistaken for an interrupted one.
     persistSession(tabId).catch(() => {})
@@ -695,7 +719,7 @@ export function useTabSessions(
         if (shouldRerender) rerender()
       }
     }
-  }, [cancelAnalysis, cancelResume, updateSessionAndRender, persistSession, rerender])
+  }, [cancelAnalysis, cancelResume, getSession, updateSessionAndRender, persistSession, rerender])
 
   const reset = useCallback(() => {
     const tabId = activeTabIdRef.current
@@ -809,8 +833,9 @@ export function useTabSessions(
     const tabId = activeTabIdRef.current
     if (!tabId) return
     const session = getSession(tabId)
+    const jobId = job.job_id
 
-    await runResumeGeneration(tabId, {
+    const run = runResumeGeneration(tabId, {
       resumeStatus: 'generating',
       resumeError: null,
       resumeMarkdown: null,
@@ -828,14 +853,24 @@ export function useTabSessions(
         ? { ok: true, markdown: response.payload.markdown, summary: response.payload.summary }
         : { ok: false, error: response.error || 'Resume generation failed' }
     })
+
+    if (jobId) {
+      resumeOwnerTabRef.current.set(jobId, tabId)
+      run.finally(() => {
+        if (resumeOwnerTabRef.current.get(jobId) === tabId) {
+          resumeOwnerTabRef.current.delete(jobId)
+        }
+      })
+    }
   }, [getSession, runResumeGeneration])
 
   const regenerateResume = useCallback(async (job: ExtractedJob, comment: string) => {
     const tabId = activeTabIdRef.current
     if (!tabId) return
     const session = getSession(tabId)
+    const jobId = job.job_id
 
-    await runResumeGeneration(tabId, {
+    const run = runResumeGeneration(tabId, {
       resumeStatus: 'generating',
       resumeError: null,
     }, async (signal) => {
@@ -865,6 +900,15 @@ export function useTabSessions(
         ? { ok: true, markdown: response.payload.markdown, summary: response.payload.summary }
         : { ok: false, error: response.error || 'Resume generation failed' }
     })
+
+    if (jobId) {
+      resumeOwnerTabRef.current.set(jobId, tabId)
+      run.finally(() => {
+        if (resumeOwnerTabRef.current.get(jobId) === tabId) {
+          resumeOwnerTabRef.current.delete(jobId)
+        }
+      })
+    }
   }, [getSession, runResumeGeneration])
 
   const setResumeMarkdown = useCallback((markdown: string | null) => {
