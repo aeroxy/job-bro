@@ -93,8 +93,9 @@ export function useTabSessions(
   const rerender = useCallback(() => setTick((t) => t + 1), [])
   const cancelledRef = useRef(new Set<number>())
   // AbortControllers for in-sidepanel runs (Chrome backend). Background backend
-  // uses CANCEL_ANALYSIS messages instead.
-  const localControllersRef = useRef(new Map<number, AbortController>())
+  // uses CANCEL_ANALYSIS/CANCEL_RESUME messages instead.
+  const localAnalysisControllersRef = useRef(new Map<number, AbortController>())
+  const localResumeControllersRef = useRef(new Map<number, AbortController>())
 
   // Track current backend in a ref so callbacks see the latest value without
   // needing to re-create on every config change.
@@ -202,9 +203,29 @@ export function useTabSessions(
 
     for (const tId of toCancel) {
       cancelledRef.current.add(tId)
-      localControllersRef.current.get(tId)?.abort(new DOMException('User stopped analysis', 'AbortError'))
-      localControllersRef.current.delete(tId)
+      localAnalysisControllersRef.current.get(tId)?.abort(new DOMException('User stopped analysis', 'AbortError'))
+      localAnalysisControllersRef.current.delete(tId)
       chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId: tId }).catch(() => {})
+    }
+  }, [])
+
+  // Cancel the in-flight resume generation for a tab AND any sibling tabs
+  // viewing the same jobId.
+  const cancelResume = useCallback((tabId: number) => {
+    const session = sessionsRef.current.get(tabId)
+    const jobId = session?.job?.job_id
+
+    const toCancel = new Set<number>([tabId])
+    if (jobId) {
+      const siblings = jobIdToTabIdsRef.current.get(jobId)
+      siblings?.forEach((tId) => toCancel.add(tId))
+    }
+
+    for (const tId of toCancel) {
+      cancelledRef.current.add(tId)
+      localResumeControllersRef.current.get(tId)?.abort(new DOMException('User stopped resume generation', 'AbortError'))
+      localResumeControllersRef.current.delete(tId)
+      chrome.runtime.sendMessage({ type: 'CANCEL_RESUME', tabId: tId }).catch(() => {})
     }
   }, [])
 
@@ -416,12 +437,14 @@ export function useTabSessions(
       const session = sessionsRef.current.get(tabId)
       const jobId = session?.job?.job_id || session?.hydratedJobId
 
-      // If the closed tab was the analysis initiator, transition sibling tabs
-      // to idle so they don't stay stuck in 'analyzing' indefinitely. Only
-      // trigger when the closed tab owns the AbortController (i.e. it was the
-      // one that started runLocalAnalysis), not when a follower tab is closed.
-      const ownsController = localControllersRef.current.has(tabId)
-      if (jobId && ownsController && (session?.status === 'analyzing' || session?.status === 'extracting' || session?.resumeStatus === 'generating')) {
+      // If the closed tab was the initiator, transition sibling tabs
+      // to idle so they don't stay stuck indefinitely. Only
+      // trigger when the closed tab owns the AbortController,
+      // not when a follower tab is closed.
+      const ownsAnalysis = localAnalysisControllersRef.current.has(tabId)
+      const ownsResume = localResumeControllersRef.current.has(tabId)
+
+      if (jobId && (ownsAnalysis || ownsResume) && (session?.status === 'analyzing' || session?.status === 'extracting' || session?.resumeStatus === 'generating')) {
         const siblings = jobIdToTabIdsRef.current.get(jobId)
         if (siblings) {
           let shouldRerender = false
@@ -454,8 +477,10 @@ export function useTabSessions(
       sessionsRef.current.delete(tabId)
       // Mark as cancelled before aborting so siblings don't treat it as a real error
       cancelledRef.current.add(tabId)
-      localControllersRef.current.get(tabId)?.abort(new DOMException('Tab was closed', 'AbortError'))
-      localControllersRef.current.delete(tabId)
+      localAnalysisControllersRef.current.get(tabId)?.abort(new DOMException('Tab was closed', 'AbortError'))
+      localAnalysisControllersRef.current.delete(tabId)
+      localResumeControllersRef.current.get(tabId)?.abort(new DOMException('Tab was closed', 'AbortError'))
+      localResumeControllersRef.current.delete(tabId)
       syncMutexRef.current.delete(tabId)
     }
     onTabRemoved.add(handleRemoved)
@@ -514,9 +539,9 @@ export function useTabSessions(
     tabId: number,
     extractedJob: ExtractedJob,
   ): Promise<AggregatedReport | null> => {
-    localControllersRef.current.get(tabId)?.abort()
+    localAnalysisControllersRef.current.get(tabId)?.abort()
     const controller = new AbortController()
-    localControllersRef.current.set(tabId, controller)
+    localAnalysisControllersRef.current.set(tabId, controller)
 
     const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
       const session = sessionsRef.current.get(tabId)
@@ -546,7 +571,7 @@ export function useTabSessions(
       await persistSession(tabId)
       return null
     } finally {
-      localControllersRef.current.delete(tabId)
+      localAnalysisControllersRef.current.delete(tabId)
     }
   }, [updateSessionAndRender, persistSession])
 
@@ -630,19 +655,19 @@ export function useTabSessions(
     const tabId = activeTabIdRef.current
     if (!tabId) return
 
-    // Cancel analysis on this tab and any siblings viewing the same job.
+    // Cancel analysis and resume generation on this tab and any siblings viewing the same job.
     cancelAnalysis(tabId)
+    cancelResume(tabId)
     const session = sessionsRef.current.get(tabId)
     const jobId = session?.job?.job_id || session?.hydratedJobId
 
+    const currentSession = sessionsRef.current.get(tabId)
     updateSessionAndRender(tabId, {
-      status: 'idle',
+      status: (currentSession?.status === 'analyzing' || currentSession?.status === 'extracting') ? 'idle' : currentSession?.status,
       error: null,
-      progress: { ...INITIAL_PROGRESS },
-      resumeStatus: 'idle',
-      resumeMarkdown: null,
-      resumeSummary: null,
-      resumeError: null,
+      progress: (currentSession?.status === 'analyzing' || currentSession?.status === 'extracting') ? { ...INITIAL_PROGRESS } : currentSession?.progress,
+      resumeStatus: currentSession?.resumeStatus === 'generating' ? 'idle' : currentSession?.resumeStatus,
+      resumeError: currentSession?.resumeStatus === 'generating' ? null : currentSession?.resumeError,
     })
     // Persist so a stopped run isn't later mistaken for an interrupted one.
     persistSession(tabId).catch(() => {})
@@ -660,10 +685,8 @@ export function useTabSessions(
               ...s,
               status: (s.status === 'analyzing' || s.status === 'extracting') ? 'idle' : s.status,
               progress: (s.status === 'analyzing' || s.status === 'extracting') ? { ...INITIAL_PROGRESS } : s.progress,
-              resumeStatus: 'idle',
-              resumeMarkdown: null,
-              resumeSummary: null,
-              resumeError: null,
+              resumeStatus: s.resumeStatus === 'generating' ? 'idle' : s.resumeStatus,
+              resumeError: s.resumeStatus === 'generating' ? null : s.resumeError,
             })
             persistSession(tId).catch(() => {})
             if (tId === activeTabIdRef.current) shouldRerender = true
@@ -672,7 +695,7 @@ export function useTabSessions(
         if (shouldRerender) rerender()
       }
     }
-  }, [cancelAnalysis, updateSessionAndRender, persistSession, rerender])
+  }, [cancelAnalysis, cancelResume, updateSessionAndRender, persistSession, rerender])
 
   const reset = useCallback(() => {
     const tabId = activeTabIdRef.current
@@ -686,6 +709,7 @@ export function useTabSessions(
     const jobId = sessionsRef.current.get(tabId)?.job?.job_id
 
     cancelAnalysis(tabId)
+    cancelResume(tabId)
     updateSessionAndRender(tabId, {
       status: 'idle',
       job: null,
@@ -700,7 +724,7 @@ export function useTabSessions(
       resumeError: null,
     })
     if (jobId) deleteSession(jobId).catch(() => {})
-  }, [cancelAnalysis, updateSessionAndRender])
+  }, [cancelAnalysis, cancelResume, updateSessionAndRender])
 
   const deleteChatTurn = useCallback(async (index: number) => {
     const tabId = activeTabIdRef.current
@@ -746,15 +770,15 @@ export function useTabSessions(
   ) => {
     updateSessionAndRender(tabId, initialPatch)
 
-    localControllersRef.current.get(tabId)?.abort(new DOMException('New resume generation started', 'AbortError'))
+    localResumeControllersRef.current.get(tabId)?.abort(new DOMException('New resume generation started', 'AbortError'))
     cancelledRef.current.delete(tabId)
     const controller = new AbortController()
-    localControllersRef.current.set(tabId, controller)
+    localResumeControllersRef.current.set(tabId, controller)
 
     try {
       const result = await work(controller.signal)
 
-      if (localControllersRef.current.get(tabId) !== controller) return
+      if (localResumeControllersRef.current.get(tabId) !== controller) return
       if (cancelledRef.current.has(tabId)) return
 
       if (result.ok) {
@@ -768,15 +792,15 @@ export function useTabSessions(
         updateSessionAndRender(tabId, { resumeError: result.error, resumeStatus: 'error' })
       }
     } catch (e) {
-      if (localControllersRef.current.get(tabId) !== controller) return
+      if (localResumeControllersRef.current.get(tabId) !== controller) return
       if (cancelledRef.current.has(tabId) || (e as Error).name === 'AbortError') return
       updateSessionAndRender(tabId, {
         resumeError: (e as Error).message,
         resumeStatus: 'error',
       })
     } finally {
-      if (localControllersRef.current.get(tabId) === controller) {
-        localControllersRef.current.delete(tabId)
+      if (localResumeControllersRef.current.get(tabId) === controller) {
+        localResumeControllersRef.current.delete(tabId)
       }
     }
   }, [updateSessionAndRender, persistSession])

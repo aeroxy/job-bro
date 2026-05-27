@@ -67,7 +67,7 @@ export function useChromeChatSession() {
     question: string,
     signal?: AbortSignal,
   ): Promise<string> => {
-    if (typeof globalThis.ai?.languageModel === 'undefined') {
+    if (typeof globalThis.LanguageModel === 'undefined') {
       throw new Error('Chrome built-in AI (Prompt API) is not available in this browser.')
     }
 
@@ -106,10 +106,10 @@ export function useChromeChatSession() {
           for (const turn of history) {
             initialPrompts.push({ role: turn.role, content: turn.content })
           }
-          if (!globalThis.ai?.languageModel) {
+          if (!globalThis.LanguageModel) {
             throw new Error('Chrome built-in AI (Prompt API) is not available in this environment')
           }
-          const session = await globalThis.ai.languageModel.create({
+          const session = await globalThis.LanguageModel.create({
             initialPrompts,
             temperature: CHAT_TEMPERATURE,
             topK: tempToTopK(CHAT_TEMPERATURE),

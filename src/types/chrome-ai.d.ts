@@ -58,11 +58,4 @@ declare global {
   interface Window {
     LanguageModel?: ChromeAiLanguageModel
   }
-
-  interface ChromeAiNamespace {
-    languageModel?: ChromeAiLanguageModel
-  }
-
-  // eslint-disable-next-line no-var
-  var ai: ChromeAiNamespace | undefined
 }

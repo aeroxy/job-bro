@@ -23,7 +23,7 @@ export default defineBackground(() => {
     }
     const resumeController = resumeControllers.get(tabId)
     if (resumeController) {
-      resumeController.abort()
+      resumeController.abort(new DOMException('Tab was closed', 'AbortError'))
       resumeControllers.delete(tabId)
     }
   })
@@ -42,6 +42,10 @@ export default defineBackground(() => {
           controller.abort()
           analysisControllers.delete(message.tabId)
         }
+        return false
+      }
+
+      case 'CANCEL_RESUME': {
         const resumeCtrl = resumeControllers.get(message.tabId)
         if (resumeCtrl) {
           resumeCtrl.abort()
@@ -73,7 +77,7 @@ export default defineBackground(() => {
         const tabId = message.tabId
         const existingResume = resumeControllers.get(tabId)
         if (existingResume) {
-          existingResume.abort()
+          existingResume.abort(new DOMException('New resume generation started', 'AbortError'))
         }
         const controller = new AbortController()
         resumeControllers.set(tabId, controller)
