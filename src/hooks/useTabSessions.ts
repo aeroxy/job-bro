@@ -421,15 +421,20 @@ export function useTabSessions(
       // trigger when the closed tab owns the AbortController (i.e. it was the
       // one that started runLocalAnalysis), not when a follower tab is closed.
       const ownsController = localControllersRef.current.has(tabId)
-      if (jobId && ownsController && (session?.status === 'analyzing' || session?.status === 'extracting')) {
+      if (jobId && ownsController && (session?.status === 'analyzing' || session?.status === 'extracting' || session?.resumeStatus === 'generating')) {
         const siblings = jobIdToTabIdsRef.current.get(jobId)
         if (siblings) {
           let shouldRerender = false
           for (const tId of siblings) {
             if (tId === tabId) continue
             const s = sessionsRef.current.get(tId)
-            if (s && (s.status === 'analyzing' || s.status === 'extracting')) {
-              sessionsRef.current.set(tId, { ...s, status: 'idle', progress: { ...INITIAL_PROGRESS } })
+            if (s && (s.status === 'analyzing' || s.status === 'extracting' || s.resumeStatus === 'generating')) {
+              sessionsRef.current.set(tId, {
+                ...s,
+                status: (s.status === 'analyzing' || s.status === 'extracting') ? 'idle' : s.status,
+                resumeStatus: s.resumeStatus === 'generating' ? 'idle' : s.resumeStatus,
+                progress: (s.status === 'analyzing' || s.status === 'extracting') ? { ...INITIAL_PROGRESS } : s.progress,
+              })
               persistSession(tId).catch(() => {})
               if (tId === activeTabIdRef.current) shouldRerender = true
             }
@@ -627,6 +632,9 @@ export function useTabSessions(
 
     // Cancel analysis on this tab and any siblings viewing the same job.
     cancelAnalysis(tabId)
+    const session = sessionsRef.current.get(tabId)
+    const jobId = session?.job?.job_id || session?.hydratedJobId
+
     updateSessionAndRender(tabId, {
       status: 'idle',
       error: null,
@@ -638,7 +646,33 @@ export function useTabSessions(
     })
     // Persist so a stopped run isn't later mistaken for an interrupted one.
     persistSession(tabId).catch(() => {})
-  }, [cancelAnalysis, updateSessionAndRender, persistSession])
+
+    // Also reset sibling tabs to idle for both analysis and resume status
+    if (jobId) {
+      const siblings = jobIdToTabIdsRef.current.get(jobId)
+      if (siblings) {
+        let shouldRerender = false
+        for (const tId of siblings) {
+          if (tId === tabId) continue
+          const s = sessionsRef.current.get(tId)
+          if (s) {
+            sessionsRef.current.set(tId, {
+              ...s,
+              status: (s.status === 'analyzing' || s.status === 'extracting') ? 'idle' : s.status,
+              progress: (s.status === 'analyzing' || s.status === 'extracting') ? { ...INITIAL_PROGRESS } : s.progress,
+              resumeStatus: 'idle',
+              resumeMarkdown: null,
+              resumeSummary: null,
+              resumeError: null,
+            })
+            persistSession(tId).catch(() => {})
+            if (tId === activeTabIdRef.current) shouldRerender = true
+          }
+        }
+        if (shouldRerender) rerender()
+      }
+    }
+  }, [cancelAnalysis, updateSessionAndRender, persistSession, rerender])
 
   const reset = useCallback(() => {
     const tabId = activeTabIdRef.current
@@ -763,6 +797,7 @@ export function useTabSessions(
       }
       const response = await chrome.runtime.sendMessage({
         type: 'GENERATE_RESUME',
+        tabId,
         payload: { job, analysisContext, qnaHistory: session.qnaHistory },
       })
       return response.type === 'RESUME_RESULT'
@@ -793,6 +828,7 @@ export function useTabSessions(
       }
       const response = await chrome.runtime.sendMessage({
         type: 'GENERATE_RESUME',
+        tabId,
         payload: {
           job,
           previousResume: session.resumeMarkdown ?? undefined,

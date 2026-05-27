@@ -57,6 +57,7 @@ export type AnalysisErrorMessage = {
 // Sidebar -> Background: generate a tailored resume
 export type GenerateResumeMessage = {
   type: 'GENERATE_RESUME'
+  tabId: number
   payload: {
     job: ExtractedJob
     analysisContext?: string  // formatted summary of the AggregatedReport
