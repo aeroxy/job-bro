@@ -607,6 +607,7 @@ export function useTabSessions(
       await persistSession(tabId)
       return null
     } finally {
+      cancelledRef.current.delete(tabId)
       if (localAnalysisControllersRef.current.get(tabId) === controller) {
         localAnalysisControllersRef.current.delete(tabId)
       }
@@ -652,6 +653,7 @@ export function useTabSessions(
       await persistSession(tabId)
       return null
     } finally {
+      cancelledRef.current.delete(tabId)
       if (localAnalysisControllersRef.current.get(tabId) === controller) {
         localAnalysisControllersRef.current.delete(tabId)
       }
@@ -853,6 +855,7 @@ export function useTabSessions(
         resumeStatus: 'error',
       })
     } finally {
+      cancelledRef.current.delete(tabId)
       if (localResumeControllersRef.current.get(tabId) === controller) {
         localResumeControllersRef.current.delete(tabId)
       }
