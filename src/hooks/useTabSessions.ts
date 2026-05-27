@@ -79,6 +79,16 @@ const DEFAULT_SESSION: TabSession = {
   hydratedJobId: null,
 }
 
+/**
+ * Main hook for managing tab-scoped analysis sessions.
+ * Handles session state (analysis reports, chat history, resume generation),
+ * tab lifecycle (syncing on navigation, cleaning up on close), and multi-tab
+ * job coordination (sharing results between tabs viewing the same job).
+ * 
+ * @param activeTabId - The currently focused tab ID.
+ * @param onTabRemoved - Set of callbacks to run when a tab is closed.
+ * @param llmConfig - Current LLM backend and model configuration.
+ */
 export function useTabSessions(
   activeTabId: number | null,
   onTabRemoved: Set<(tabId: number) => void>,
@@ -112,12 +122,17 @@ export function useTabSessions(
   // even across multiple tabs. Subsequent calls return the in-flight promise.
   const analysisPromisesRef = useRef(new Map<string, Promise<AggregatedReport | null>>())
 
-  // Helper: get or create a session for a tab
+  /**
+   * Retrieves or initializes a session for the given tab ID.
+   */
   const getSession = useCallback((tabId: number): TabSession => {
     return sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
   }, [])
 
-  // Helper: sync the jobIdToTabIdsRef mapping when a session's jobId changes
+  /**
+   * Maintains the O(1) jobIdToTabIdsRef mapping. Should be called whenever
+   * a session's jobId (hydrated or explicit) changes.
+   */
   const updateJobIdMapping = useCallback((tabId: number, session: TabSession, patch: Partial<TabSession>) => {
     const oldJobId = session.job?.job_id || session.hydratedJobId
     const newJobId = ('job' in patch)
@@ -140,7 +155,9 @@ export function useTabSessions(
     return newJobId
   }, [])
 
-  // Helper: update a session and re-render if it's the active tab
+  /**
+   * Updates session state for a tab and triggers a re-render if it's active.
+   */
   const updateSession = useCallback((tabId: number, patch: Partial<TabSession>) => {
     const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
     const newJobId = updateJobIdMapping(tabId, session, patch)
@@ -603,6 +620,12 @@ export function useTabSessions(
     tabId: number,
     extractedJob: ExtractedJob,
   ): Promise<AggregatedReport | null> => {
+    localAnalysisControllersRef.current.get(tabId)?.abort(
+      new DOMException('New analysis started', 'AbortError'),
+    )
+    const controller = new AbortController()
+    localAnalysisControllersRef.current.set(tabId, controller)
+
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'ANALYZE_JD',
@@ -610,6 +633,7 @@ export function useTabSessions(
         payload: { job: extractedJob },
       })
 
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
       if (cancelledRef.current.has(tabId)) return null
 
       if (response.type === 'ANALYSIS_RESULT') {
@@ -621,10 +645,16 @@ export function useTabSessions(
       await persistSession(tabId)
       return null
     } catch (e) {
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
+      if ((e as Error).name === 'AbortError') return null
       if (cancelledRef.current.has(tabId)) return null
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
       await persistSession(tabId)
       return null
+    } finally {
+      if (localAnalysisControllersRef.current.get(tabId) === controller) {
+        localAnalysisControllersRef.current.delete(tabId)
+      }
     }
   }, [updateSessionAndRender, persistSession])
 
