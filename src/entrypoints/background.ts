@@ -2,6 +2,7 @@ import { runAnalysis, runChat, runResume } from '@/lib/llm-handlers'
 import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
 
 const analysisControllers = new Map<number, AbortController>()
+const resumeControllers = new Map<number, AbortController>()
 
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
@@ -20,6 +21,11 @@ export default defineBackground(() => {
       controller.abort()
       analysisControllers.delete(tabId)
     }
+    const resumeController = resumeControllers.get(tabId)
+    if (resumeController) {
+      resumeController.abort()
+      resumeControllers.delete(tabId)
+    }
   })
 
   chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
@@ -35,6 +41,11 @@ export default defineBackground(() => {
         if (controller) {
           controller.abort()
           analysisControllers.delete(message.tabId)
+        }
+        const resumeCtrl = resumeControllers.get(message.tabId)
+        if (resumeCtrl) {
+          resumeCtrl.abort()
+          resumeControllers.delete(message.tabId)
         }
         return false
       }
@@ -58,18 +69,31 @@ export default defineBackground(() => {
         return true
       }
 
-      case 'GENERATE_RESUME':
+      case 'GENERATE_RESUME': {
+        const tabId = message.tabId
+        const existingResume = resumeControllers.get(tabId)
+        if (existingResume) {
+          existingResume.abort()
+        }
+        const controller = new AbortController()
+        resumeControllers.set(tabId, controller)
         handleGenerateResume(
           message.payload.job,
+          controller.signal,
           message.payload.analysisContext,
           message.payload.previousResume,
           message.payload.previousSummary,
           message.payload.comment,
           message.payload.qnaHistory
-        ).then(sendResponse).catch((e) => {
+        ).then((result) => {
+          resumeControllers.delete(tabId)
+          sendResponse(result)
+        }).catch((e) => {
+          resumeControllers.delete(tabId)
           sendResponse({ type: 'RESUME_ERROR', error: (e as Error).message })
         })
         return true
+      }
 
       case 'CHAT_REQUEST':
         handleChatMessage(
@@ -174,13 +198,14 @@ async function handleChatMessage(
 
 async function handleGenerateResume(
   job: import('@/types/job').ExtractedJob,
+  signal: AbortSignal,
   analysisContext?: string,
   previousResume?: string,
   previousSummary?: string,
   comment?: string,
   qnaHistory?: import('@/types/chat').ChatTurn[]
 ): Promise<ResumeResponse> {
-  const result = await runResume(job, analysisContext, previousResume, previousSummary, comment, qnaHistory)
+  const result = await runResume(job, analysisContext, previousResume, previousSummary, comment, qnaHistory, signal)
   if (result.ok) return { type: 'RESUME_RESULT', payload: { markdown: result.markdown, summary: result.summary } }
   return { type: 'RESUME_ERROR', error: result.error }
 }
