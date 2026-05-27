@@ -1,8 +1,9 @@
-import { ArrowLeft, Building2, Clock, Trash2, Check } from 'lucide-react'
+import { ArrowLeft, Building2, Clock, Trash2, Check, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
+import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { VerdictBadge } from './VerdictBadge'
-import { useHistory } from '@/hooks/useHistory'
+import { type GroupedRecord, useHistory } from '@/hooks/useHistory'
 import { useAutoResetState } from '@/hooks/useAutoResetState'
 import { Spinner } from '@/components/ui/spinner'
 
@@ -23,8 +24,141 @@ function timeAgo(ts: number): string {
   return `${days}d`
 }
 
+function formatTime(ts: number): string {
+  return new Date(ts).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function GroupRow({
+  group,
+  onSelect,
+  onDelete,
+  confirmingId,
+}: {
+  group: GroupedRecord
+  onSelect: (id: string) => void
+  onDelete: (id: string) => void
+  confirmingId: string | null
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const hasHistory = group.count > 1
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      <div
+        className="p-3 hover:bg-muted/50 transition-colors cursor-pointer group flex items-start justify-between gap-2"
+        onClick={() => onSelect(group.latest.id)}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            {hasHistory && (
+              <button
+                className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setExpanded(!expanded)
+                }}
+              >
+                {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+              </button>
+            )}
+            <h4 className="text-xs font-medium truncate">{group.job.title}</h4>
+            {hasHistory && (
+              <span className="shrink-0 text-[10px] text-muted-foreground bg-muted rounded px-1 py-0.5">
+                {group.count}x
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+            <span className="inline-flex items-start gap-0.5">
+              <Building2 className="size-2.5 shrink-0 mt-0.5" />
+              {group.job.company}
+            </span>
+            <span className="inline-flex items-center gap-0.5 whitespace-nowrap">
+              <Clock className="size-2.5" />
+              {timeAgo(group.latest.createdAt)}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <VerdictBadge
+            verdict={group.latest.report.verdict}
+            score={group.latest.report.overall_score}
+            className="scale-75 origin-right"
+          />
+          <Button
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(group.latest.id)
+            }}
+            className={`cursor-pointer size-7 rounded-md transition-all duration-200 ${
+              confirmingId === group.latest.id
+                ? 'bg-destructive/10 text-destructive opacity-100'
+                : 'opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive'
+            }`}
+          >
+            {confirmingId === group.latest.id ? (
+              <Check className="size-3.5 text-destructive animate-scale-in" />
+            ) : (
+              <Trash2 className="size-3.5 text-muted-foreground" />
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {expanded && hasHistory && (
+        <div className="border-t bg-muted/30 px-3 py-1.5 space-y-1">
+          {group.records.slice(1).map((record) => (
+            <div
+              key={record.id}
+              className="flex items-center justify-between gap-2 py-1 px-1 rounded hover:bg-muted/50 cursor-pointer group/sub"
+              onClick={() => onSelect(record.id)}
+            >
+              <div className="min-w-0 flex-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+                <RotateCcw className="size-2.5 shrink-0" />
+                <span className="truncate">{formatTime(record.createdAt)}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <VerdictBadge
+                  verdict={record.report.verdict}
+                  score={record.report.overall_score}
+                  className="scale-[0.6] origin-right"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDelete(record.id)
+                  }}
+                  className={`cursor-pointer size-5 rounded transition-all duration-200 ${
+                    confirmingId === record.id
+                      ? 'bg-destructive/10 text-destructive opacity-100'
+                      : 'opacity-0 group-hover/sub:opacity-100 hover:bg-destructive/10 hover:text-destructive'
+                  }`}
+                >
+                  {confirmingId === record.id ? (
+                    <Check className="size-3 text-destructive animate-scale-in" />
+                  ) : (
+                    <Trash2 className="size-3 text-muted-foreground" />
+                  )}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
-  const { records, orphanCount, loading, remove, clearAll, prune } = useHistory()
+  const { grouped, orphanCount, loading, remove, clearAll, prune } = useHistory()
   const [confirmingId, setConfirmingId] = useAutoResetState<string | null>(null)
   const [confirmingPrune, setConfirmingPrune] = useAutoResetState(false)
   const [confirmingClearAll, setConfirmingClearAll] = useAutoResetState(false)
@@ -65,7 +199,7 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
             >
               {confirmingPrune ? 'Confirm Prune' : `Prune (${orphanCount})`}
             </Button>
-            {records.length > 0 && (
+            {grouped.length > 0 && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -104,68 +238,31 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
           <div className="flex justify-center py-8">
             <Spinner />
           </div>
-        ) : records.length === 0 ? (
+        ) : grouped.length === 0 ? (
           <div className="text-center text-muted-foreground text-xs py-8">
             No analyses yet
           </div>
         ) : (
           <div className="space-y-2">
-            {records.map((record) => (
-              <div
-                key={record.id}
-                className="border rounded-lg p-3 hover:bg-muted/50 transition-colors cursor-pointer group"
-                onClick={() => onSelect(record.id)}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <h4 className="text-xs font-medium truncate">{record.job.title}</h4>
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
-                      <span className="inline-flex items-start gap-0.5">
-                        <Building2 className="size-2.5 shrink-0 mt-0.5" />
-                        {record.job.company}
-                      </span>
-                      <span className="inline-flex items-center gap-0.5 whitespace-nowrap">
-                        <Clock className="size-2.5" />
-                        {timeAgo(record.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <VerdictBadge
-                      verdict={record.report.verdict}
-                      score={record.report.overall_score}
-                      className="scale-75 origin-right"
-                    />
-                    <Button
-                      variant="ghost"
-                      onClick={async (e) => {
-                        e.stopPropagation()
-                        if (confirmingId === record.id) {
-                          try {
-                            await remove(record.id)
-                          } catch (e) {
-                            setError(`Delete failed: ${(e as Error).message}`)
-                          }
-                          setConfirmingId(null)
-                        } else {
-                          setConfirmingId(record.id)
-                        }
-                      }}
-                      className={`cursor-pointer size-7 rounded-md transition-all duration-200 ${
-                        confirmingId === record.id
-                          ? 'bg-destructive/10 text-destructive opacity-100'
-                          : 'opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive'
-                      }`}
-                    >
-                      {confirmingId === record.id ? (
-                        <Check className="size-3.5 text-destructive animate-scale-in" />
-                      ) : (
-                        <Trash2 className="size-3.5 text-muted-foreground" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              </div>
+            {grouped.map((group) => (
+              <GroupRow
+                key={group.jobId}
+                group={group}
+                onSelect={onSelect}
+                onDelete={async (id) => {
+                  if (confirmingId === id) {
+                    try {
+                      await remove(id)
+                    } catch (e) {
+                      setError(`Delete failed: ${(e as Error).message}`)
+                    }
+                    setConfirmingId(null)
+                  } else {
+                    setConfirmingId(id)
+                  }
+                }}
+                confirmingId={confirmingId}
+              />
             ))}
           </div>
         )}
