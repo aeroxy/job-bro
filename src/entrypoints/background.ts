@@ -18,7 +18,7 @@ export default defineBackground(() => {
   chrome.tabs.onRemoved.addListener((tabId) => {
     const controller = analysisControllers.get(tabId)
     if (controller) {
-      controller.abort()
+      controller.abort(new DOMException('Tab was closed', 'AbortError'))
       analysisControllers.delete(tabId)
     }
     const resumeController = resumeControllers.get(tabId)
@@ -39,7 +39,7 @@ export default defineBackground(() => {
       case 'CANCEL_ANALYSIS': {
         const controller = analysisControllers.get(message.tabId)
         if (controller) {
-          controller.abort()
+          controller.abort(new DOMException('User stopped analysis', 'AbortError'))
           analysisControllers.delete(message.tabId)
         }
         return false
@@ -48,7 +48,7 @@ export default defineBackground(() => {
       case 'CANCEL_RESUME': {
         const resumeCtrl = resumeControllers.get(message.tabId)
         if (resumeCtrl) {
-          resumeCtrl.abort()
+          resumeCtrl.abort(new DOMException('User stopped resume generation', 'AbortError'))
           resumeControllers.delete(message.tabId)
         }
         return false
@@ -59,15 +59,19 @@ export default defineBackground(() => {
         // Abort any existing analysis for this tab
         const existing = analysisControllers.get(tabId)
         if (existing) {
-          existing.abort()
+          existing.abort(new DOMException('New analysis started', 'AbortError'))
         }
         const controller = new AbortController()
         analysisControllers.set(tabId, controller)
         handleAnalyzeJD(message.payload.job, controller.signal, tabId).then((result) => {
-          analysisControllers.delete(tabId)
+          if (analysisControllers.get(tabId) === controller) {
+            analysisControllers.delete(tabId)
+          }
           sendResponse(result)
         }).catch((e) => {
-          analysisControllers.delete(tabId)
+          if (analysisControllers.get(tabId) === controller) {
+            analysisControllers.delete(tabId)
+          }
           sendResponse({ type: 'ANALYSIS_ERROR', error: (e as Error).message })
         })
         return true
@@ -90,10 +94,14 @@ export default defineBackground(() => {
           message.payload.comment,
           message.payload.qnaHistory
         ).then((result) => {
-          resumeControllers.delete(tabId)
+          if (resumeControllers.get(tabId) === controller) {
+            resumeControllers.delete(tabId)
+          }
           sendResponse(result)
         }).catch((e) => {
-          resumeControllers.delete(tabId)
+          if (resumeControllers.get(tabId) === controller) {
+            resumeControllers.delete(tabId)
+          }
           sendResponse({ type: 'RESUME_ERROR', error: (e as Error).message })
         })
         return true
