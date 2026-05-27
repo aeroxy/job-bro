@@ -4,6 +4,11 @@ import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '
 const analysisControllers = new Map<number, AbortController>()
 const resumeControllers = new Map<number, AbortController>()
 
+/**
+ * Background service worker for the Job Bro extension.
+ * Orchestrates job extraction, analysis, and resume generation by coordinating
+ * between the content scripts and the LLM handlers.
+ */
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
@@ -124,6 +129,11 @@ export default defineBackground(() => {
   })
 })
 
+/**
+ * Validates the tab state and requests job description extraction from the content script.
+ * @param tabId - The ID of the tab to extract from.
+ * @returns A promise resolving to the extraction response.
+ */
 async function handleRequestExtraction(tabId: number): Promise<ExtractionResponse> {
   const tab = await chrome.tabs.get(tabId).catch(() => null)
 
@@ -141,6 +151,12 @@ async function handleRequestExtraction(tabId: number): Promise<ExtractionRespons
   return sendExtractMessage(tab.id!)
 }
 
+/**
+ * Sends an extraction message to the content script, attempting to re-inject
+ * the script if the first attempt fails.
+ * @param tabId - The ID of the tab to send the message to.
+ * @returns A promise resolving to the extraction response.
+ */
 async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
   // First attempt: message the already-running content script
   const response = await new Promise<ExtractionResponse | null>((resolve) => {
@@ -184,6 +200,13 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
   })
 }
 
+/**
+ * Orchestrates job analysis by calling runAnalysis and broadcasting progress updates.
+ * @param job - The extracted job description.
+ * @param signal - AbortSignal for cancellation.
+ * @param tabId - The initiator tab ID.
+ * @returns A promise resolving to the analysis result message.
+ */
 async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal, tabId: number) {
   const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
     chrome.runtime.sendMessage({
@@ -197,6 +220,14 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
   return { type: 'ANALYSIS_ERROR', error: result.error }
 }
 
+/**
+ * Handles interactive chat messages about a specific job posting.
+ * @param question - The user's question.
+ * @param history - Prior conversation turns.
+ * @param jobMarkdown - The job description in markdown format.
+ * @param analysisContext - The completed analysis report.
+ * @returns A promise resolving to the chat response message.
+ */
 async function handleChatMessage(
   question: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
@@ -208,6 +239,17 @@ async function handleChatMessage(
   return { type: 'CHAT_ERROR', error: result.error }
 }
 
+/**
+ * Orchestrates resume generation based on a job posting and analysis.
+ * @param job - The extracted job description.
+ * @param signal - AbortSignal for cancellation.
+ * @param analysisContext - Optional analysis report.
+ * @param previousResume - Optional prior resume version.
+ * @param previousSummary - Optional prior summary version.
+ * @param comment - Optional user feedback for regeneration.
+ * @param qnaHistory - Optional chat history for context.
+ * @returns A promise resolving to the resume response message.
+ */
 async function handleGenerateResume(
   job: import('@/types/job').ExtractedJob,
   signal: AbortSignal,
