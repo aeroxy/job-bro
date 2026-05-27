@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
   type AnalysisRecord,
@@ -12,6 +12,14 @@ import {
   saveSession,
 } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
+
+export interface GroupedRecord {
+  jobId: string
+  job: AnalysisRecord['job']
+  latest: AnalysisRecord
+  records: AnalysisRecord[]
+  count: number
+}
 
 async function openOrFocusTab(url: string, jobId?: string): Promise<void> {
   if (jobId) {
@@ -74,6 +82,28 @@ export function useHistory() {
     refresh()
   }, [refresh])
 
+  const grouped = useMemo<GroupedRecord[]>(() => {
+    const map = new Map<string, AnalysisRecord[]>()
+    for (const r of records) {
+      const key = r.job.job_id ?? r.id
+      const arr = map.get(key)
+      if (arr) arr.push(r)
+      else map.set(key, [r])
+    }
+    const result: GroupedRecord[] = []
+    for (const [key, arr] of map) {
+      arr.sort((a, b) => b.createdAt - a.createdAt)
+      result.push({
+        jobId: key,
+        job: arr[0].job,
+        latest: arr[0],
+        records: arr,
+        count: arr.length,
+      })
+    }
+    return result
+  }, [records])
+
   const remove = useCallback(async (id: string) => {
     setRecords((prev) => prev.filter((r) => r.id !== id))
     await deleteAnalysis(id)
@@ -94,5 +124,5 @@ export function useHistory() {
     return getAnalysis(id)
   }, [])
 
-  return { records, orphanCount, loading, refresh, remove, clearAll, prune, get }
+  return { records, grouped, orphanCount, loading, refresh, remove, clearAll, prune, get }
 }
