@@ -88,6 +88,11 @@ export type CancelAnalysisMessage = {
   tabId: number
 }
 
+export type CancelResumeMessage = {
+  type: 'CANCEL_RESUME'
+  tabId: number
+}
+
 // Sidebar -> Background: ask a follow-up question about the analysis
 export type ChatRequestMessage = {
   type: 'CHAT_REQUEST'
@@ -120,6 +125,7 @@ export type Message =
   | JDExtractionFailedMessage
   | AnalyzeJDMessage
   | CancelAnalysisMessage
+  | CancelResumeMessage
   | AnalysisResultMessage
   | AnalysisProgressMessage
   | AnalysisErrorMessage
