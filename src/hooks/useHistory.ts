@@ -92,7 +92,6 @@ export function useHistory() {
     }
     const result: GroupedRecord[] = []
     for (const [key, arr] of map) {
-      arr.sort((a, b) => b.createdAt - a.createdAt)
       result.push({
         jobId: key,
         job: arr[0].job,
