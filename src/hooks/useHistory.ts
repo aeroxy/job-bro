@@ -85,7 +85,7 @@ export function useHistory() {
   const grouped = useMemo<GroupedRecord[]>(() => {
     const map = new Map<string, AnalysisRecord[]>()
     for (const r of records) {
-      const key = r.job.job_id ?? r.id
+      const key = r.job.job_id || r.id
       const arr = map.get(key)
       if (arr) arr.push(r)
       else map.set(key, [r])

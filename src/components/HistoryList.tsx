@@ -95,7 +95,7 @@ function GroupRow({
             className={`cursor-pointer size-7 rounded-md transition-all duration-200 ${
               confirmingId === group.latest.id
                 ? 'bg-destructive/10 text-destructive opacity-100'
-                : 'opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive'
+                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-destructive/10 hover:text-destructive'
             }`}
           >
             {confirmingId === group.latest.id ? (
@@ -134,7 +134,7 @@ function GroupRow({
                   className={`cursor-pointer size-5 rounded transition-all duration-200 ${
                     confirmingId === record.id
                       ? 'bg-destructive/10 text-destructive opacity-100'
-                      : 'opacity-0 group-hover/sub:opacity-100 hover:bg-destructive/10 hover:text-destructive'
+                      : 'opacity-0 group-hover/sub:opacity-100 focus-visible:opacity-100 hover:bg-destructive/10 hover:text-destructive'
                   }`}
                 >
                   {confirmingId === record.id ? (
