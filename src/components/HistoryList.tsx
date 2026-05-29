@@ -49,53 +49,49 @@ function GroupRow({
 
   return (
     <div className="border rounded-lg overflow-hidden">
-      <div
-        className="p-3 hover:bg-muted/50 transition-colors cursor-pointer group flex items-start justify-between gap-2"
-        onClick={() => onSelect(group.latest.id)}
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            {hasHistory && (
-              <button
-                className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setExpanded(!expanded)
-                }}
-              >
-                {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-              </button>
-            )}
-            <h4 className="text-xs font-medium truncate">{group.job.title}</h4>
-            {hasHistory && (
-              <span className="shrink-0 text-[10px] text-muted-foreground bg-muted rounded px-1 py-0.5">
-                {group.count}x
+      <div className="p-3 hover:bg-muted/50 transition-colors group flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1 flex items-start gap-1.5">
+          {hasHistory && (
+            <button
+              className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground mt-0.5"
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            </button>
+          )}
+          <div
+            className="min-w-0 flex-1 cursor-pointer"
+            onClick={() => onSelect(group.latest.id)}
+          >
+            <div className="flex items-center gap-1.5">
+              <h4 className="text-xs font-medium truncate">{group.job.title}</h4>
+              {hasHistory && (
+                <span className="shrink-0 text-[10px] text-muted-foreground bg-muted rounded px-1 py-0.5">
+                  {group.count}x
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+              <span className="inline-flex items-start gap-0.5">
+                <Building2 className="size-2.5 shrink-0 mt-0.5" />
+                {group.job.company}
               </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
-            <span className="inline-flex items-start gap-0.5">
-              <Building2 className="size-2.5 shrink-0 mt-0.5" />
-              {group.job.company}
-            </span>
-            <span className="inline-flex items-center gap-0.5 whitespace-nowrap">
-              <Clock className="size-2.5" />
-              {timeAgo(group.latest.createdAt)}
-            </span>
+              <span className="inline-flex items-center gap-0.5 whitespace-nowrap">
+                <Clock className="size-2.5" />
+                {timeAgo(group.latest.createdAt)}
+              </span>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <VerdictBadge
             verdict={group.latest.report.verdict}
             score={group.latest.report.overall_score}
-            className="scale-75 origin-right"
+            size="sm"
           />
           <Button
             variant="ghost"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete(group.latest.id)
-            }}
+            onClick={() => onDelete(group.latest.id)}
             className={`cursor-pointer size-7 rounded-md transition-all duration-200 ${
               confirmingId === group.latest.id
                 ? 'bg-destructive/10 text-destructive opacity-100'
@@ -116,10 +112,12 @@ function GroupRow({
           {group.records.slice(1).map((record) => (
             <div
               key={record.id}
-              className="flex items-center justify-between gap-2 py-1 px-1 rounded hover:bg-muted/50 cursor-pointer group/sub"
-              onClick={() => onSelect(record.id)}
+              className="flex items-center justify-between gap-2 py-1 px-1 rounded hover:bg-muted/50 group/sub"
             >
-              <div className="min-w-0 flex-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+              <div
+                className="min-w-0 flex-1 flex items-center gap-2 text-[10px] text-muted-foreground cursor-pointer"
+                onClick={() => onSelect(record.id)}
+              >
                 <RotateCcw className="size-2.5 shrink-0" />
                 <span className="truncate">{formatTime(record.createdAt)}</span>
               </div>
@@ -127,15 +125,12 @@ function GroupRow({
                 <VerdictBadge
                   verdict={record.report.verdict}
                   score={record.report.overall_score}
-                  className="scale-[0.6] origin-right"
+                  size="sm"
                 />
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onDelete(record.id)
-                  }}
+                  onClick={() => onDelete(record.id)}
                   className={`cursor-pointer size-5 rounded transition-all duration-200 ${
                     confirmingId === record.id
                       ? 'bg-destructive/10 text-destructive opacity-100'
