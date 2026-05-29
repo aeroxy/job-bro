@@ -246,12 +246,12 @@ export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
                 onSelect={onSelect}
                 onDelete={async (id) => {
                   if (confirmingId === id) {
+                    setConfirmingId(null)
                     try {
                       await remove(id)
                     } catch (e) {
                       setError(`Delete failed: ${(e as Error).message}`)
                     }
-                    setConfirmingId(null)
                   } else {
                     setConfirmingId(id)
                   }
