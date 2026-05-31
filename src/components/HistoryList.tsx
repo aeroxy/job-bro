@@ -53,6 +53,8 @@ function GroupRow({
         <div className="min-w-0 flex-1 flex items-start gap-1.5">
           {hasHistory && (
             <button
+              type="button"
+              aria-label={expanded ? 'Collapse history' : 'Expand history'}
               className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground mt-0.5"
               onClick={() => setExpanded(!expanded)}
             >
