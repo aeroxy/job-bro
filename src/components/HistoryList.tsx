@@ -93,6 +93,7 @@ function GroupRow({
           />
           <Button
             variant="ghost"
+            size="icon-sm"
             onClick={() => onDelete(group.latest.id)}
             className={`cursor-pointer size-7 rounded-md transition-all duration-200 ${
               confirmingId === group.latest.id
