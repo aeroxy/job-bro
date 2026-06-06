@@ -19,13 +19,19 @@ async function parseViaOffscreen(html: string): Promise<string> {
   return res.markdown
 }
 
-function fetchWithTimeout(url: string, signal?: AbortSignal): Promise<Response> {
+function fetchWithTimeout(
+  url: string,
+  signal?: AbortSignal,
+  credentials: RequestCredentials = 'omit',
+): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(new DOMException('Fetch timed out', 'TimeoutError')), FETCH_TIMEOUT_MS)
   const combined = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal
-  // credentials: 'include' so the cookie a user earns by clearing DuckDuckGo's
-  // bot-verification page (in the tab we open below) is sent on the retry.
-  return fetch(url, { signal: combined, redirect: 'follow', credentials: 'include' }).finally(() => clearTimeout(timer))
+  // Default to 'omit' so read_page — which the model can point at any URL,
+  // including ones suggested by an injected job description — never sends the
+  // user's cookies to arbitrary sites. Only the DuckDuckGo search path opts
+  // into 'include' (see webSearch), where the bot-verification cookie matters.
+  return fetch(url, { signal: combined, redirect: 'follow', credentials }).finally(() => clearTimeout(timer))
 }
 
 // DDG serves its anti-bot page with HTTP 200, so we detect it by content.
@@ -52,7 +58,9 @@ export async function webSearch(query: string, ctx: ToolHandlerContext = {}): Pr
   // service-worker fetch). Returns the same shape as the old Google path
   // once the offscreen parser turns the HTML into markdown.
   const url = `https://html.duckduckgo.com/html?q=${q}`
-  const res = await fetchWithTimeout(url, ctx.signal)
+  // 'include' so the cookie a user earns by clearing DuckDuckGo's
+  // bot-verification page is sent on the retry.
+  const res = await fetchWithTimeout(url, ctx.signal, 'include')
   if (!res.ok) throw new Error(`DuckDuckGo returned HTTP ${res.status}`)
   const html = await res.text()
   if (isDdgBotChallenge(html)) {

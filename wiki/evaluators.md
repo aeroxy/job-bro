@@ -183,89 +183,6 @@ team, etc.). `evidences` lets the user verify what the analyst actually read.
 
 ---
 
-### Salary (`salary.ts`)
-
-**Role:** Compensation analyst with currency/COL adjustment awareness.
-
-**Inputs:** Job description, `salary_expectation`, `years_of_experience`
-
-**Output:**
-```ts
-{
-  estimated_range: { min: number, max: number, currency: string }
-  expectation_alignment: "above" | "within" | "below"
-  // "above" = job pays MORE than expected (good for candidate)
-  // "below" = job pays LESS than expected (bad)
-  risk_flag: boolean
-  reasoning: string
-}
-```
-
----
-
-### Preference (`preference.ts`)
-
-**Role:** Career advisor matching job to user lifestyle preferences.
-
-**Inputs:** Job description, `JobPreferences` (remote, locations, company size, industries, deal breakers)
-
-**Output:**
-```ts
-{
-  alignment_score: number   // 0–1
-  conflicts: Array<{
-    category: string
-    expected: string
-    actual: string
-    severity: "low" | "medium" | "high"
-  }>
-  matches: string[]
-  summary: string
-}
-```
-
----
-
-### Risk (`risk.ts`)
-
-**Role:** Job posting red flag detector.
-
-**Detects:** under-leveling, overqualification, vague JD, toxic culture signals, unrealistic requirements, high turnover indicators
-
-**Output:**
-```ts
-{
-  overall_risk: "low" | "medium" | "high"
-  flags: Array<{
-    type: string
-    description: string
-    severity: "low" | "medium" | "high"
-  }>
-  summary: string
-}
-```
-
----
-
-### Growth (`growth.ts`)
-
-**Role:** Career strategist evaluating long-term value of the role.
-
-**Output:**
-```ts
-{
-  learning: number           // 0–1
-  brand_value: number        // 0–1
-  career_trajectory: number  // 0–1
-  overall_growth: number     // 0–1
-  highlights: string[]
-  concerns: string[]
-  summary: string
-}
-```
-
----
-
 ### Resume Generator (`resume.ts`)
 
 Not part of the analysis pipeline — triggered separately.
@@ -329,7 +246,7 @@ Defined in `src/lib/tools/definitions.ts`:
 
 ### Tool execution pipeline
 
-```
+```text
 agent loop (service worker or sidepanel)
   └─ executeTool(call, signal)
        └─ webSearch / readPage  (lib/tools/handlers.ts)

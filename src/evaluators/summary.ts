@@ -4,6 +4,7 @@ import { runAgentWithValidation, executeTool } from '@/lib/agent'
 import type { ToolDefinition } from '@/lib/tools/types'
 import type { Verdict } from '@/types/evaluation'
 import type { LLMConfig } from '@/types/profile'
+import type { ToolCall } from '@/lib/tools/types'
 import type { EvaluatorResults } from './aggregator'
 import { SUMMARY_SCHEMA } from './schemas'
 
@@ -40,6 +41,7 @@ export async function runSummaryEvaluator(
   config: LLMConfig,
   customPrompt: string | undefined,
   tools: ToolDefinition[],
+  onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
   jsonSchema?: JsonSchemaSpec
 ): Promise<SummaryResult> {
@@ -61,10 +63,12 @@ ${toonEncode(evaluatorResults)}
     tools,
     executeTool,
     validate: (r) =>
-      typeof r.job_summary === 'string' && typeof r.reasoning === 'string'
+      typeof r.job_summary === 'string' && r.job_summary.trim() &&
+      typeof r.reasoning === 'string' && r.reasoning.trim()
         ? null
-        : '"job_summary" and "reasoning" must be strings',
+        : '"job_summary" and "reasoning" must be non-empty strings',
     signal,
+    onToolCall,
     jsonSchema,
   })
 }

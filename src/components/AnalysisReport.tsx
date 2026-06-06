@@ -288,6 +288,18 @@ function arr<T>(v: T[] | null | undefined): T[] {
   return Array.isArray(v) ? v : []
 }
 
+// Only http(s) links are safe to render as clickable anchors. Evidence URLs
+// come from LLM output (which reads attacker-influenced pages), so a crafted
+// javascript:/data: URL must never become an executable link.
+function safeHttpUrl(url: string): string | null {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.toString() : null
+  } catch {
+    return null
+  }
+}
+
 function ReferencesSection({ references }: { references: EvidenceItem[] }) {
   return (
     <div className="border rounded-lg p-3 space-y-1.5">
@@ -296,17 +308,23 @@ function ReferencesSection({ references }: { references: EvidenceItem[] }) {
         References ({references.length})
       </h4>
       <ul className="space-y-1.5">
-        {references.map((ref, i) => (
+        {references.map((ref, i) => {
+          const safeUrl = safeHttpUrl(ref.url)
+          return (
           <li key={i} className="text-xs space-y-0.5">
-            <a
-              href={ref.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 break-all"
-            >
-              {ref.title || ref.url}
-              <ExternalLink className="size-2.5 shrink-0" />
-            </a>
+            {safeUrl ? (
+              <a
+                href={safeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 break-all"
+              >
+                {ref.title || ref.url}
+                <ExternalLink className="size-2.5 shrink-0" />
+              </a>
+            ) : (
+              <span className="break-all">{ref.title || ref.url}</span>
+            )}
             {ref.snippet && (
               <p className="text-muted-foreground line-clamp-2">{ref.snippet}</p>
             )}
@@ -316,7 +334,8 @@ function ReferencesSection({ references }: { references: EvidenceItem[] }) {
               </p>
             )}
           </li>
-        ))}
+          )
+        })}
       </ul>
     </div>
   )

@@ -74,6 +74,7 @@ export async function runGrowthEvaluator(
             ? null
             : '"highlights" and "concerns" must be arrays')
         if (base) return base
+        if (typeof r.summary !== 'string' || !r.summary.trim()) return '"summary" must be a non-empty string'
         if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
         return null
       },

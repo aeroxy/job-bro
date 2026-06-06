@@ -68,6 +68,7 @@ export async function runRiskEvaluator(
         if (!['low', 'medium', 'high'].includes(r.overall_risk as string))
           return '"overall_risk" must be "low", "medium", or "high"'
         if (!Array.isArray(r.flags)) return '"flags" must be an array'
+        if (typeof r.summary !== 'string' || !r.summary.trim()) return '"summary" must be a non-empty string'
         if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
         return null
       },

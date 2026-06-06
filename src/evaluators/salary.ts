@@ -63,6 +63,7 @@ export async function runSalaryEvaluator(
           return '"estimated_range.min" and "max" must be numbers'
         if (!['below', 'within', 'above'].includes(r.expectation_alignment as string))
           return '"expectation_alignment" must be "below", "within", or "above"'
+        if (typeof r.reasoning !== 'string' || !r.reasoning.trim()) return '"reasoning" must be a non-empty string'
         if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
         return null
       },
