@@ -155,7 +155,7 @@ function GroupRow({
   )
 }
 
-export function HistoryList({ onSelect, onBack, onRestore }: HistoryListProps) {
+export function HistoryList({ onSelect, onBack, onRestore: _onRestore }: HistoryListProps) {
   const { grouped, orphanCount, loading, remove, clearAll, prune } = useHistory()
   const [confirmingId, setConfirmingId] = useAutoResetState<string | null>(null)
   const [confirmingPrune, setConfirmingPrune] = useAutoResetState(false)

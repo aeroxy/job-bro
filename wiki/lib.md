@@ -4,7 +4,9 @@
 
 LLM dispatcher. Routes to one of two backends based on `LLMConfig.backend`:
 - `'openai'` (default) — OpenAI-compatible HTTP fetch.
-- `'chrome-prompt'` — Chrome's built-in `LanguageModel` API (Gemini Nano), via [`chrome-prompt-client.ts`](#chrome-prompt-clientts).
+- `'chrome-prompt'` — Chrome's built-in `LanguageModel` API (Gemini Nano), via [`chrome-ai-client.ts`](#chrome-ai-clientts).
+
+The dispatcher is pure TS and runs in the service worker. Both backends are addressed via the same `chatCompletion` / `chatCompletionWithTools` surface; Chrome's window-only `LanguageModel` lives in the offscreen and is reached through `chrome-ai-client`.
 
 ### `chatCompletion(config, messages, options)`
 
@@ -21,6 +23,10 @@ Options:
 - Timeout: 30 seconds (AbortController)
 
 **Custom headers:** `config.custom_headers` is parsed as JSON and merged into request headers.
+
+### `chatCompletionWithTools(config, messages, tools, options)`
+
+Non-streaming tool-call variant. Same HTTP plumbing, but `tools` is forwarded as `body.tools` and the response may include `tool_calls`. Returns a `ChatCompletionWithToolsResult` (`{ content, tool_calls, raw }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` and `name` for tool results). Chrome backend passes through with no `tools` (Gemini Nano has no native tool API) and returns the same shape with `tool_calls: []`, so the agent loop terminates after one iteration.
 
 ---
 
@@ -39,12 +45,6 @@ Asserts that all listed fields on `obj` are numbers in range 0–1. Throws on vi
 
 ---
 
-### `runWithValidation<T>(config, messages, validate)`
-
-Calls `chatCompletion`, parses JSON, runs `validate`. On failure, appends the validation error as a user message and retries once.
-
----
-
 ### `buildMessages(customPrompt, internalPrompt, userContent)`
 
 Assembles the `messages` array for a chat completion:
@@ -53,32 +53,80 @@ Assembles the `messages` array for a chat completion:
 
 ---
 
-## `chrome-prompt-client.ts`
+## `chrome-ai-client.ts`
 
-Adapter for Chrome's built-in `LanguageModel` API (Gemini Nano). **Window-context only** — calling these functions from the MV3 service worker will throw because `LanguageModel` is not exposed there. The API is accessed via `globalThis.LanguageModel` (latest Chrome spec).
+Thin messaging client for the Chrome AI work that lives in the offscreen document. Pure sidepanel/service-worker code — never touches `globalThis.LanguageModel` itself. The offscreen holds the one in-process model instance and serializes calls through a FIFO queue.
 
 | Export | Purpose |
 |---|---|
-| `chatCompletionChrome(messages, options)` | Same return contract as `chatCompletion`. Folds all `system` messages into a single concatenated initial prompt; sends prior turns via `initialPrompts`; sends the last user message via `session.prompt()`. JSON mode uses Chrome's `responseConstraint`. Streaming uses `promptStreaming()`. Sessions are created and destroyed per call. |
-| `getChromeAiAvailability()` | Checks `globalThis.LanguageModel` existence, then wraps `LanguageModel.availability()` with a try/catch — returns `'unavailable'` if the global is missing. |
-| `ensureChromeAiDownloaded(signal?)` | Checks `globalThis.LanguageModel` existence, then triggers a one-shot session create to start (or wait on) the model download. Progress events flow through `onChromeDownloadProgress`. |
-| `onChromeDownloadProgress(listener)` | Subscribe to `downloadprogress` events broadcast from any session created via this module or via `chromeDownloadMonitor()`. Returns an unsubscribe fn. |
-| `chromeDownloadMonitor()` | Returns a `monitor` function suitable for `LanguageModel.create({ monitor })`. Use it from any caller (e.g. the persistent chat session hook) so download progress reaches the same shared listeners. |
+| `chatCompletionChrome(messages, options)` | One-shot completion; builds a fresh session per call, folds systems into one initial prompt, sends the last user message. Returns `string`. |
+| `getChromeAiAvailability()` | Wraps the offscreen's `CHROME_AI_AVAILABILITY`; returns `'unavailable' \| 'downloadable' \| 'downloading' \| 'available'`. |
+| `ensureChromeAiDownloaded(signal?)` | Triggers a model download via offscreen; awaits completion. |
+| `onChromeDownloadProgress(listener)` | Subscribe to `CHROME_AI_DOWNLOAD_PROGRESS` broadcasts (one shared listener set per call). Returns an unsubscribe fn. |
+| `createChromeAiSession({ systemPrompt, history, temperature })` | Returns a `sessionId` string for a persistent session stored in offscreen's `Map`. |
+| `promptChromeAiSession(sessionId, content, { signal })` | Issues a turn on a persistent session. |
+| `destroyChromeAiSession(sessionId)` | Destroys and removes the session. |
 
-`max_tokens` has no equivalent in the Chrome API and is silently dropped — long resume generations may truncate.
+`SYSTEM_PROMPT_SEPARATOR` is exported for the chat prompt builder that needs to mark where the per-turn context begins inside a long system prompt.
+
+---
+
+## `agent.ts`
+
+Agent loop driver. Replaces the old `runWithValidation` for evaluator output. Lives in the service worker (or any extension page — it's pure TS).
+
+| Export | Purpose |
+|---|---|
+| `runAgent(config, messages, tools, handlers, options)` | Drives an OpenAI-style tool-calling loop: model → tool calls → append results → loop. Caps at `MAX_AGENT_ITERATIONS = 8`. Returns the final `ChatCompletionWithToolsResult`. |
+| `runAgentWithValidation<T>(config, messages, tools, handlers, validate, options)` | Wraps `runAgent` with a JSON-extract + Zod-style validate step. On validation failure, appends the errors as a user message and continues the loop (or retries once before throwing). |
+| `executeTool(call, handlers, context)` | Generic dispatcher: looks up the tool by name in `handlers`, calls it with parsed args, returns the result. |
+| `ToolHandlerContext` | `{ signal: AbortSignal }` passed to handlers so they can compose with the caller's timeout. |
+
+`handlers` is a `Map<string, ToolHandler>` (`(args, context) => Promise<unknown>`). Adding a new tool is: (1) add the schema in `tools/definitions.ts`, (2) add a handler in `tools/handlers.ts`, (3) register in the evaluator's `handlers` map. All 5 evaluators + summary use the same `ALL_TOOLS` set + a shared handler map built once per analysis.
+
+---
+
+## `tools/`
+
+Tool definitions + handlers, shared across evaluators.
+
+### `types.ts`
+`ToolDefinition` (function-calling schema), `ToolCall`, `ToolHandler`, `ToolHandlerContext`, `ChatCompletionWithToolsResult`.
+
+### `definitions.ts`
+Two tools, both OpenAI-compatible function-calling schemas:
+- `GOOGLE_SEARCH_TOOL` — `{ query: string }`. Run by the service worker: fetch `https://www.google.com/search?q=...`, then `PARSE_HTML` to offscreen with `mode: 'google_search'`.
+- `READ_PAGE_TOOL` — `{ url: string }`. Fetch (with `AbortSignal.timeout(20s)`), then `PARSE_HTML` with `mode: 'read_page'`.
+- `ALL_TOOLS` — the array passed to every evaluator's `chatCompletionWithTools` call.
+
+### `handlers.ts`
+`googleSearch` and `readPage` — fetch in the service worker, send HTML to offscreen, return `{ results: Array<{ title, url, snippet }> }` / `{ title, url, content_markdown }`. Both honor `context.signal` for caller aborts.
+
+---
+
+## `html-to-markdown.ts`
+
+Shared HTML→markdown pipeline used by both `tools/handlers.ts` and the offscreen. The offscreen uses Turndown directly (window-only); the tool handlers don't parse, they just call the offscreen.
+
+| Export | Purpose |
+|---|---|
+| `parseGoogleSearchResults(html)` | Strips `<script>`/`<style>`, trims to first `<h1>Search Results</h1>` anchor and everything after, then runs Turndown. Returns `{ markdown, trimmed: boolean }`. |
+| `parseGenericPage(html)` | Same strip, no trim, Turndown. Returns `{ markdown, trimmed: false }`. |
+| `stripScriptsAndStyles(html)` | Internal helper. |
+| `trimToAnchor(html, tag, text)` | Internal helper. |
 
 ---
 
 ## `llm-handlers.ts`
 
-Shared orchestration callable from either the background service worker (HTTP backend) or the sidepanel window (Chrome backend). Pure functions — no `chrome.runtime` messaging here.
+Orchestration glue. Always runs in the service worker. The Chrome backend now flows through `chrome-ai-client` instead of calling `LanguageModel` directly.
 
 | Export | Returns | Used by |
 |---|---|---|
-| `runAnalysis(job, signal, onProgress?)` | `{ ok: true, report } \| { ok: false, error }` | `background.ts` (cloud), `useTabSessions.analyze` (chrome) |
-| `runResume(job, analysisContext?, previousResume?, previousSummary?, comment?, qnaHistory?, signal?)` | `{ ok: true, markdown, summary } \| { ok: false, error }` | `background.ts` (cloud), `useTabSessions.generateResume`/`regenerateResume` (chrome) |
-| `runChat(question, history, jobMarkdown, analysisContext)` | `{ ok: true, answer } \| { ok: false, error }` | `background.ts` (cloud) |
-| `buildChatSystemPrompt(profile, jobMarkdown, analysisContext)` | `string` | `ReportChat` (Chrome chat path uses this with the persistent session hook) |
+| `runAnalysis(job, signal, onProgress?)` | `{ ok: true, report } \| { ok: false, error }` | `background.ts` |
+| `runResume(job, analysisContext?, previousResume?, previousSummary?, comment?, qnaHistory?, signal?)` | `{ ok: true, markdown, summary } \| { ok: false, error }` | `background.ts` |
+| `runChat(question, history, jobMarkdown, analysisContext)` | `{ ok: true, answer } \| { ok: false, error }` | `background.ts` |
+| `buildChatSystemPrompt(profile, jobMarkdown, analysisContext)` | `string` | `ReportChat` (used by `useChromeChatSession` on the Chrome path) |
 
 Each loads `profile`, `llmConfig`, and `customPrompt` from `chrome.storage.local` internally. Cloud backend additionally validates `base_url` + `model`; Chrome backend skips that check.
 
@@ -98,19 +146,20 @@ Thin wrappers over `chrome.storage.local`:
 
 ## `db.ts`
 
-IndexedDB via `idb` library. Database: `job-bro`, version 1.
+IndexedDB via `idb` library. Database: `job-bro`, version 2.
 
-**Object store:** `analyses`
-- Key: auto-incremented `id`
-- Indexes: `by-created` (on `createdAt`), `by-company` (on `job.company`)
+**Object store:** `sessions`
+- Key: LinkedIn `job_id` (string)
+- Indexes: `by-updated` (on `updatedAt`)
+- Holds `PersistedSession[]` — live UI state + history source (Q&A, analysis, resume). Replaces the older `analyses` v1 store.
 
 | Function | Description |
 |---|---|
-| `saveAnalysis(record)` | Upserts record |
-| `listAnalyses()` | Returns all records sorted by `createdAt` desc |
-| `getAnalysis(id)` | Fetches single record |
-| `deleteAnalysis(id)` | Removes record |
-| `clearAnalyses()` | Deletes all records |
+| `saveSession(session)` | Upserts by `job_id` |
+| `listSessions()` | Returns all records sorted by `updatedAt` desc |
+| `getSession(jobId)` | Fetches single record |
+| `deleteSession(jobId)` | Removes record |
+| `clearSessions()` | Deletes all records |
 
 ---
 

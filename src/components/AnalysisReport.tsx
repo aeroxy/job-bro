@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  BarChart3,
   Banknote,
   Heart,
   Lightbulb,

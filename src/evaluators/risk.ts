@@ -1,5 +1,6 @@
-import { runWithValidation } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
+import { runAgentWithValidation, executeTool } from '@/lib/agent'
+import { ALL_TOOLS } from '@/lib/tools/definitions'
 import type { RiskResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
@@ -17,17 +18,19 @@ Calibration for senior/executive roles (CTO, VP, Director, Principal):
 - If the candidate's stated salary expectation is high (>$300k USD-equivalent base) and the role is a founding/seed role with equity-heavy comp, escalate to "high" risk on seed_stage_comp_risk.
 - Stealth + founding + no public team/funding info → flag stealth_no_diligence at medium or high.
 
-For more junior IC roles, do not over-penalize normal startup ambiguity.`
+For more junior IC roles, do not over-penalize normal startup ambiguity.
+
+You have access to two tools: \`google_search\` (for finding public information about a company, role, or market) and \`read_page\` (for reading a specific URL). Use them when the JD lacks information you would need to assess risk — e.g., a company name you'd otherwise have to guess at, or an unfamiliar role. Do not call tools for facts already present in the JD. When you are done, output the compact JSON described above.`
 
 export async function runRiskEvaluator(
   jobContent: string,
   profile: UserProfile,
   config: LLMConfig,
-  customPrompt?: string,
+  customPrompt: string,
   signal?: AbortSignal
 ): Promise<RiskResult> {
   const messages: ChatMessage[] = []
-  if (customPrompt?.trim()) messages.push({ role: 'system', content: customPrompt.trim() })
+  if (customPrompt) messages.push({ role: 'system', content: customPrompt })
   // Include years_of_experience and salary_expectation for leveling and comp-risk detection
   const yearsOfExp = profile.preferences.years_of_experience
   const salaryExp = profile.salary_expectation?.trim()
@@ -42,15 +45,19 @@ export async function runRiskEvaluator(
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
   messages.push({ role: 'user', content: PROMPT })
 
-  return runWithValidation<RiskResult>(
+  return runAgentWithValidation<RiskResult>(
     config,
     messages,
-    (r) => {
-      if (!['low', 'medium', 'high'].includes(r.overall_risk as string))
-        return '"overall_risk" must be "low", "medium", or "high"'
-      if (!Array.isArray(r.flags)) return '"flags" must be an array'
-      return null
-    },
-    signal
+    {
+      tools: ALL_TOOLS,
+      executeTool,
+      validate: (r) => {
+        if (!['low', 'medium', 'high'].includes(r.overall_risk as string))
+          return '"overall_risk" must be "low", "medium", or "high"'
+        if (!Array.isArray(r.flags)) return '"flags" must be an array'
+        return null
+      },
+      signal,
+    }
   )
 }

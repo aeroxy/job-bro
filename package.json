@@ -22,7 +22,8 @@
     "dev": "wxt",
     "build": "wxt build",
     "zip": "wxt zip",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "typecheck": "tsgo --noEmit"
   },
   "devDependencies": {
     "@radix-ui/react-collapsible": "^1.1.7",
@@ -36,6 +37,8 @@
     "@types/chrome": "^0.0.287",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.1",
+    "@types/turndown": "^5.0.6",
+    "@typescript/native-preview": "^7.0.0-dev.20260605.1",
     "@wxt-dev/module-react": "^1.2.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -50,6 +53,7 @@
   },
   "dependencies": {
     "@toon-format/toon": "^2.1.0",
-    "marked": "^17.0.6"
+    "marked": "^17.0.6",
+    "turndown": "^7.2.4"
   }
 }

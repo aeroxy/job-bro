@@ -6,8 +6,11 @@
 job-bro/
 ├── src/
 │   ├── entrypoints/             # Chrome extension entry points
-│   │   ├── background.ts        # Background service worker (LLM calls, routing)
+│   │   ├── background.ts        # Background service worker (LLM routing, offscreen mgmt, FIFO gate)
 │   │   ├── content.ts           # Content script (LinkedIn DOM parsing)
+│   │   ├── offscreen/           # Hidden document: HTML→markdown parser + Chrome AI host
+│   │   │   └── main.ts          # DOMParser + Turndown, LanguageModel session store + FIFO
+│   │   ├── offscreen.html       # HTML shell for the offscreen document
 │   │   └── sidepanel/
 │   │       ├── App.tsx          # Main app component
 │   │       └── main.tsx         # React DOM render
@@ -27,7 +30,7 @@ job-bro/
 
 ## Process Model
 
-The orchestrator (`src/lib/llm-handlers.ts`) is pure TS and runs in **either** the background worker or the sidepanel window — chosen per request by `LLMConfig.backend`.
+The service worker is the **single LLM orchestrator**. Both backends route through it; the offscreen document hosts the bits that need a window context.
 
 ```
 User → LinkedIn Job Page
@@ -39,20 +42,19 @@ User → LinkedIn Job Page
     Background Service Worker
          │
          ▼ (returns ExtractedJob to sidepanel)
-    Sidepanel decides where to run analysis based on config.backend:
-
-  ─── backend === 'openai' ────────────────────────
     Sidepanel → ANALYZE_JD → Background
     Background runs llm-handlers.runAnalysis (Promise.all)
-    5 evaluators → HTTP fetch → cloud LLM
-    ANALYSIS_PROGRESS messages stream back to sidepanel
-    Background → ANALYSIS_RESULT → sidepanel
-
-  ─── backend === 'chrome-prompt' ─────────────────
-    Sidepanel calls llm-handlers.runAnalysis directly
-    5 evaluators → chatCompletion → chatCompletionChrome
-                → LanguageModel.create / .prompt (Gemini Nano)
-    Progress callback updates sidepanel state in-process
+    5 evaluators → agent loop → tool calls / chat
+         │
+         ├── backend === 'openai' ──────────────────────
+         │     HTTP fetch → cloud LLM
+         │     tool calls → service worker fetch
+         │                  → PARSE_HTML → offscreen (DOMParser + Turndown)
+         │
+         └── backend === 'chrome-prompt' ──────────────
+               chrome-ai-client → chrome.runtime.sendMessage → offscreen
+               offscreen FIFO queue → LanguageModel.create / .prompt (Gemini Nano)
+               Download progress broadcast → sidepanel
          │
          ▼ (aggregator)
     AggregatedReport → saved to IndexedDB
@@ -61,7 +63,10 @@ User → LinkedIn Job Page
     User views report / generates resume / browses history
 ```
 
-Resume generation and chat Q&A use the same backend dispatch (sidepanel-local for Chrome, background message for cloud). Chat additionally uses a stateful Chrome session via `useChromeChatSession` to avoid re-encoding conversation history on each turn.
+The offscreen is the only place with access to `LanguageModel` (Gemini Nano) and the only place that parses HTML for tools. The service worker serializes everything through it:
+
+- **Tools** (`google_search`, `read_page`): service worker fetches the URL with `AbortSignal.timeout(20s)`, then sends the raw HTML to offscreen with `PARSE_HTML` + `mode`. Background's `onMessage` returns `false` for `PARSE_HTML` so the offscreen's `sendResponse` wins.
+- **Chrome AI**: every call goes through a single FIFO `withChromeAiLock` inside the offscreen. Persistent chat sessions (one per `useChromeChatSession` instance) are stored in a `Map<sessionId, ChromeAiSession>` and addressed by id. The sidepanel/background hold only the id, not the object.
 
 ### AbortController Tracking
 
@@ -94,6 +99,14 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `CHAT_REQUEST` | sidepanel → background | Follow-up Q&A question |
 | `CHAT_RESPONSE` | background → sidepanel | Q&A answer |
 | `CHAT_ERROR` | background → sidepanel | Q&A failure |
+| `PARSE_HTML` | any → offscreen | `{ html, mode: 'google_search' \| 'read_page' }` → `{ markdown, trimmed }` |
+| `CHROME_AI_CHAT` | any → offscreen | One-shot completion; returns `{ result: string }` |
+| `CHROME_AI_AVAILABILITY` | any → offscreen | Returns `{ result: ChromeAiAvailability }` |
+| `CHROME_AI_DOWNLOAD` | any → offscreen | Triggers model download; returns `{ result: void }` |
+| `CHROME_AI_SESSION_CREATE` | any → offscreen | Persistent session; returns `{ result: sessionId }` |
+| `CHROME_AI_SESSION_PROMPT` | any → offscreen | Session turn; returns `{ result: string }` |
+| `CHROME_AI_SESSION_DESTROY` | any → offscreen | Releases session; returns `{ result: null }` |
+| `CHROME_AI_DOWNLOAD_PROGRESS` | offscreen → all | `{ loaded: number }` — broadcast during model download |
 
 ## Storage Layout
 
@@ -118,13 +131,16 @@ The content script (`content.ts`) is declared in `wxt.config.ts` to match `*://w
 | Backend | Runs In | Why |
 |---------|---------|-----|
 | External HTTP | Service worker | Fetch works reliably; no lifecycle issues |
-| Chrome AI | Sidepanel window | `LanguageModel` API unavailable in service workers |
+| Chrome AI | Offscreen document | `LanguageModel` API requires a window; service worker / workers don't have one |
+| HTML parsing (tools) | Offscreen document | `DOMParser` + Turndown need DOMParser API; service worker can't create one |
 
 Chrome's built-in `LanguageModel` (Gemini Nano) requires a window context.
-The MV3 service worker does not expose this API. Additionally, the 5-minute
-worker lifecycle could interrupt long-running LLM evaluations.
+The MV3 service worker does not expose this API. We host it (and the
+HTML→markdown tool pipeline) in a single `offscreen.html` document created
+with `chrome.offscreen.Reason.DOM_PARSER`. All Chrome AI work serializes
+through one FIFO inside the offscreen — Gemini Nano is one in-process
+model, and the offscreen's `onMessage` listeners fire in parallel.
 
-The shared orchestrator (`llm-handlers.ts`) is pure TypeScript and runs in
-either context — chosen per request by `LLMConfig.backend`. The Chrome backend
-bypasses all IPC messaging and calls `runAnalysis()`/`runResume()` directly
-from the sidepanel.
+The shared orchestrator (`llm-handlers.ts`) runs in the service worker.
+The Chrome backend goes through `chrome-ai-client`, which messages the
+offscreen — no per-context code duplication.

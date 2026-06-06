@@ -27,7 +27,7 @@ export default defineConfig({
   manifest: {
     name: 'Job Bro',
     description: 'AI-powered LinkedIn job posting analyzer',
-    permissions: ['sidePanel', 'storage', 'activeTab', 'tabs', 'scripting'],
+    permissions: ['sidePanel', 'storage', 'activeTab', 'tabs', 'scripting', 'offscreen'],
     host_permissions: [
       '*://*/*',
     ],

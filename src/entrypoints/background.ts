@@ -4,6 +4,37 @@ import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '
 const analysisControllers = new Map<number, AbortController>()
 const resumeControllers = new Map<number, AbortController>()
 
+const OFFSCREEN_URL = 'offscreen.html'
+const OFFSCREEN_REASONS: chrome.offscreen.Reason[] = [chrome.offscreen.Reason.DOM_PARSER]
+
+let offscreenReady: Promise<void> | null = null
+
+// Ensure the offscreen document exists. Idempotent — reuses the existing
+// document if one is already alive. The offscreen document runs the
+// DOMParser + Turndown work; the service worker only does fetch + routing.
+// Service-worker-only: chrome.offscreen.createDocument is unavailable from
+// extension pages.
+async function ensureOffscreen(): Promise<void> {
+  if (offscreenReady) return offscreenReady
+  offscreenReady = (async () => {
+    try {
+      // @ts-expect-error — hasDocument() exists at runtime but isn't in the typings
+      if (await chrome.offscreen.hasDocument?.(OFFSCREEN_URL)) return
+    } catch {
+      /* hasDocument not available — fall through to createDocument */
+    }
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: OFFSCREEN_REASONS,
+      justification: 'Parse fetched HTML into markdown for the agent tools.',
+    })
+  })().catch((e) => {
+    offscreenReady = null
+    throw e
+  })
+  return offscreenReady
+}
+
 /**
  * Background service worker for the Job Bro extension.
  * Orchestrates job extraction, analysis, and resume generation by coordinating
@@ -12,11 +43,14 @@ const resumeControllers = new Map<number, AbortController>()
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
+  // Eagerly create the offscreen document so the agent tools are ready by the
+  // time an analysis is requested. Service workers can be killed and restarted
+  // — ensureOffscreen is idempotent and re-creates the document if the system
+  // closed it.
+  ensureOffscreen().catch((e) => console.warn('[Job Bro] Offscreen create failed', e))
+
   chrome.runtime.onInstalled.addListener((details) => {
     console.log('[Job Bro] Extension installed or updated:', details.reason)
-    if (details.reason === 'update' || details.reason === 'install') {
-      // Optional: Logic to re-inject scripts into open tabs could go here
-    }
   })
 
   // Clean up controllers when tabs are closed
@@ -34,6 +68,13 @@ export default defineBackground(() => {
   })
 
   chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
+    // The offscreen document handles PARSE_HTML. Returning false here means
+    // "don't claim the response" so the offscreen's listener can call
+    // sendResponse and the caller's sendMessage awaits it.
+    if (message && (message as { type?: string }).type === 'PARSE_HTML') {
+      return false
+    }
+
     switch (message.type) {
       case 'REQUEST_EXTRACTION':
         handleRequestExtraction(message.tabId).then(sendResponse).catch((e) => {
@@ -61,7 +102,6 @@ export default defineBackground(() => {
 
       case 'ANALYZE_JD': {
         const tabId = message.tabId
-        // Abort any existing analysis for this tab
         const existing = analysisControllers.get(tabId)
         if (existing) {
           existing.abort(new DOMException('New analysis started', 'AbortError'))
@@ -208,6 +248,10 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
  * @returns A promise resolving to the analysis result message.
  */
 async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal, tabId: number) {
+  // Make sure the offscreen parser is alive before evaluators may try to
+  // call google_search / read_page.
+  await ensureOffscreen()
+
   const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
     chrome.runtime.sendMessage({
       type: 'ANALYSIS_PROGRESS',

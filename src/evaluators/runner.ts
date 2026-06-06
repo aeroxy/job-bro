@@ -41,29 +41,30 @@ export async function runAllEvaluators(
   job: ExtractedJob,
   profile: UserProfile,
   config: LLMConfig,
-  customPrompt?: string,
+  customPrompt: string,
   onProgress?: ProgressCallback,
   signal?: AbortSignal
 ): Promise<AggregatedReport> {
   const jobMarkdown = jobToMarkdown(job)
 
-  // All evaluators run in parallel — each builds its own focused context
-  const [jobFit, salary, preference, risk, growth] = await Promise.all([
-    runWithTracking<JobFitResult>('job_fit', () =>
-      runJobFitEvaluator(jobMarkdown, profile, config, customPrompt, signal)
-    , onProgress),
+  const jobFit = await runWithTracking<JobFitResult>('job_fit', () =>
+    runJobFitEvaluator(jobMarkdown, profile, config, customPrompt, signal)
+    , onProgress)
+
+  // All the rest evaluators run in parallel — each builds its own focused context
+  const [salary, preference, risk, growth] = await Promise.all([
     runWithTracking<SalaryResult>('salary', () =>
       runSalaryEvaluator(jobMarkdown, profile, config, customPrompt, signal)
-    , onProgress),
+      , onProgress),
     runWithTracking<PreferenceResult>('preference', () =>
       runPreferenceEvaluator(jobMarkdown, profile, config, customPrompt, signal)
-    , onProgress),
+      , onProgress),
     runWithTracking<RiskResult>('risk', () =>
       runRiskEvaluator(jobMarkdown, profile, config, customPrompt, signal)
-    , onProgress),
+      , onProgress),
     runWithTracking<GrowthResult>('growth', () =>
       runGrowthEvaluator(jobMarkdown, profile, config, customPrompt, signal)
-    , onProgress),
+      , onProgress),
   ])
 
   const evaluators = { job_fit: jobFit, salary, preference, risk, growth }

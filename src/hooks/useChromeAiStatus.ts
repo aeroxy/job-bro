@@ -4,7 +4,7 @@ import {
   ensureChromeAiDownloaded,
   getChromeAiAvailability,
   onChromeDownloadProgress,
-} from '@/lib/chrome-prompt-client'
+} from '@/lib/chrome-ai-client'
 
 export interface ChromeAiStatusState {
   status: ChromeAiAvailability

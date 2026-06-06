@@ -1,5 +1,7 @@
-import { runWithValidation, validateNumbers, buildPreferencesContext } from '@/lib/llm-client'
+import { validateNumbers, buildPreferencesContext } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
+import { runAgentWithValidation, executeTool } from '@/lib/agent'
+import { ALL_TOOLS } from '@/lib/tools/definitions'
 import type { PreferenceResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
@@ -21,25 +23,29 @@ export async function runPreferenceEvaluator(
   jobContent: string,
   profile: UserProfile,
   config: LLMConfig,
-  customPrompt?: string,
+  customPrompt: string,
   signal?: AbortSignal
 ): Promise<PreferenceResult> {
   const messages: ChatMessage[] = []
-  if (customPrompt?.trim()) messages.push({ role: 'system', content: customPrompt.trim() })
+  if (customPrompt) messages.push({ role: 'system', content: customPrompt })
   messages.push({ role: 'system', content: buildPreferencesContext(profile) })
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
 {"alignment_score":0.0,"conflicts":[{"category":"","expected":"","actual":"","severity":"low"}],"matches":[],"summary":""}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
   messages.push({ role: 'user', content: PROMPT })
 
-  return runWithValidation<PreferenceResult>(
+  return runAgentWithValidation<PreferenceResult>(
     config,
     messages,
-    (r) =>
-      validateNumbers(r, ['alignment_score']) ??
-      (Array.isArray(r.conflicts) && Array.isArray(r.matches)
-        ? null
-        : '"conflicts" and "matches" must be arrays'),
-    signal
+    {
+      tools: ALL_TOOLS,
+      executeTool,
+      validate: (r) =>
+        validateNumbers(r, ['alignment_score']) ??
+        (Array.isArray(r.conflicts) && Array.isArray(r.matches)
+          ? null
+          : '"conflicts" and "matches" must be arrays'),
+      signal,
+    }
   )
 }

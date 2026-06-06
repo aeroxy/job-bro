@@ -1,10 +1,13 @@
 
-import { chatCompletionChrome } from './chrome-prompt-client'
+import { chatCompletionChrome } from './chrome-ai-client'
 import type { LLMConfig, UserProfile } from '@/types/profile'
+import type { ChatCompletionWithToolsResult, ToolCall, ToolDefinition } from './tools/types'
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  tool_call_id?: string
+  tool_calls?: ToolCall[]
 }
 
 interface ChatCompletionResponse {
@@ -371,6 +374,121 @@ async function streamCompletion(
 
 function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+// Tool-aware variant of chatCompletion. Returns the raw model message so the
+// caller can inspect tool_calls. For Chrome AI backend tools are not supported
+// (Gemini Nano has no tool API); the LLM still gets the messages and returns
+// a plain string content with no tool_calls — the agent loop terminates after
+// the first iteration. Non-streaming only.
+export async function chatCompletionWithTools(
+  config: LLMConfig,
+  messages: ChatMessage[],
+  options: {
+    tools: ToolDefinition[]
+    tool_choice?: 'auto' | 'required' | 'none'
+    temperature?: number
+    max_tokens?: number
+    signal?: AbortSignal
+  }
+): Promise<ChatCompletionWithToolsResult> {
+  if (config.backend === 'chrome-prompt') {
+    const content = await chatCompletionChrome(messages, {
+      temperature: options.temperature,
+      signal: options.signal,
+    })
+    return { content }
+  }
+
+  const queue = getQueue(config.base_url)
+  const concurrency = config.concurrency ?? 2
+  return queue.run(concurrency, () => toolCompletionRequest(config, messages, options))
+}
+
+async function toolCompletionRequest(
+  config: LLMConfig,
+  messages: ChatMessage[],
+  options: {
+    tools: ToolDefinition[]
+    tool_choice?: 'auto' | 'required' | 'none'
+    temperature?: number
+    max_tokens?: number
+    signal?: AbortSignal
+  }
+): Promise<ChatCompletionWithToolsResult> {
+  const { tools, tool_choice = 'auto', temperature = 0.3, max_tokens = 2000, signal } = options
+  const timeoutMs = (config.timeout ?? 30) * 1000
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages,
+    temperature,
+    max_tokens,
+    tools,
+    tool_choice,
+  }
+
+  const baseUrl = config.base_url.trim().replace(/\/+$/, '')
+  if (!baseUrl) throw new Error('LLM base URL is not configured')
+  const url = `${baseUrl}/chat/completions`
+
+  const httpRetryDelays = [1000, 3000]
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(
+      () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
+      timeoutMs
+    )
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (config.api_key) headers['Authorization'] = `Bearer ${config.api_key}`
+      if (config.custom_headers) {
+        try {
+          Object.assign(headers, JSON.parse(config.custom_headers))
+        } catch {
+          /* ignore malformed custom headers */
+        }
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+      })
+
+      clearTimeout(timer)
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error')
+        const retryable = [429, 500, 502, 503].includes(response.status)
+        if (retryable && attempt < 2) {
+          lastError = new Error(`HTTP ${response.status}: ${errorText}`)
+          await delay(httpRetryDelays[attempt])
+          continue
+        }
+        throw new Error(`LLM API error (${response.status}): ${errorText}`)
+      }
+
+      const data = (await response.json()) as ChatCompletionResponse
+      const message = data.choices?.[0]?.message
+      if (!message) throw new Error('LLM returned empty response')
+
+      const tool_calls = (message as { tool_calls?: ToolCall[] }).tool_calls
+      return {
+        content: message.content ?? '',
+        tool_calls: Array.isArray(tool_calls) && tool_calls.length > 0 ? tool_calls : undefined,
+      }
+    } catch (e) {
+      clearTimeout(timer)
+      throw e instanceof Error ? e : new Error(String(e))
+    }
+  }
+
+  throw lastError ?? new Error('LLM request failed')
 }
 
 // --- Per-evaluator context builders ---
