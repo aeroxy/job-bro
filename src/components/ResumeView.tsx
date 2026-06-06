@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, FileText, Printer, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Printer, RefreshCw, Sparkles } from 'lucide-react'
 import { useMemo } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { marked } from 'marked'
@@ -16,6 +16,7 @@ interface ResumeViewProps {
   error: string | null
   onMarkdownChange: (md: string) => void
   onRegenerate: (comment: string) => void
+  onRegenerateFresh: () => void
   onBack: () => void
 }
 
@@ -26,6 +27,7 @@ export function ResumeView({
   error,
   onMarkdownChange,
   onRegenerate,
+  onRegenerateFresh,
   onBack,
 }: ResumeViewProps) {
   const html = useMemo(() => {
@@ -145,6 +147,19 @@ export function ResumeView({
               <RefreshCw className="size-3" />
             </Button>
           </form>
+
+          {/* Fresh regeneration — ignores the current resume, rebuilds from profile + JD */}
+          {markdown && (
+            <Button
+              onClick={onRegenerateFresh}
+              variant="ghost"
+              size="sm"
+              className="w-full cursor-pointer text-muted-foreground"
+            >
+              <Sparkles className="size-3" />
+              Regenerate from scratch
+            </Button>
+          )}
 
           {/* Download row */}
           {markdown && (

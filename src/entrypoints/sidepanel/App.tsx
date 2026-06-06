@@ -169,6 +169,7 @@ export default function App() {
         error={resumeError}
         onMarkdownChange={setResumeMarkdown}
         onRegenerate={(comment) => job && regenerateResume(job, comment)}
+        onRegenerateFresh={() => job && generateResume(job, report ? formatAnalysisContext(report) : undefined)}
         onBack={() => setTabView({ name: 'main' })}
       />
     )
