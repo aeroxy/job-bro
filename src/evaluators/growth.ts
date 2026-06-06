@@ -1,16 +1,34 @@
-import { validateNumbers, buildResumeContext, buildPreferencesContext } from '@/lib/llm-client'
+import { validateNumbers, buildResumeContext, buildPreferencesContext, buildPriorResearchContext } from '@/lib/llm-client'
 import type { ChatMessage, JsonSchemaSpec } from '@/lib/llm-client'
 import { runAgentWithValidation, executeTool } from '@/lib/agent'
 import type { ToolDefinition } from '@/lib/tools/types'
-import type { GrowthResult } from '@/types/evaluation'
+import type { EvidenceItem, GrowthResult, JobFitResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 import type { ToolCall } from '@/lib/tools/types'
+import type { ToolExecutor } from '@/lib/agent'
 import { GROWTH_SCHEMA } from './schemas'
 
 export const GROWTH_SCHEMA_NAME = 'growth_result'
 export const GROWTH_JSON_SCHEMA: JsonSchemaSpec = {
   name: GROWTH_SCHEMA_NAME,
   schema: GROWTH_SCHEMA as unknown as Record<string, unknown>,
+}
+
+// Job-fit conclusions piped in from the upstream stage. Growth's
+// learning_opportunity is the mirror image of job-fit: "gaps" are the new
+// ground this role would cover (high learning), "matching_skills" are areas
+// the candidate has already shipped in (low learning). Consuming this avoids
+// re-deriving the candidate's current level from scratch.
+function buildGrowthUpstreamContext(jobFit?: JobFitResult): string | null {
+  if (!jobFit) return null
+  return `A job-fit analysis has already been completed for this candidate and job. Use it as the reference for the candidate's CURRENT level relative to this role — do NOT re-derive their domains from scratch. The "gaps" are the new ground this role would cover (learning surface); the "matching_skills" are areas the candidate has already shipped in (low learning). Build your growth scoring on top of this.
+
+<job_fit_analysis>
+overall_fit: ${jobFit.overall_fit}
+matching_skills: ${jobFit.matching_skills.join(', ') || 'none'}
+gaps: ${jobFit.gaps.join('; ') || 'none'}
+summary: ${jobFit.summary}
+</job_fit_analysis>`
 }
 
 // Growth is the most candidate-relative of the five evaluators: the same JD
@@ -47,7 +65,10 @@ export async function runGrowthEvaluator(
   tools: ToolDefinition[],
   onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
-  jsonSchema?: JsonSchemaSpec
+  jsonSchema?: JsonSchemaSpec,
+  jobFit?: JobFitResult,
+  priorResearch?: EvidenceItem[],
+  exec: ToolExecutor = executeTool
 ): Promise<GrowthResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -55,6 +76,12 @@ export async function runGrowthEvaluator(
   // Preferences give the model the candidate's stated targets (industries of
   // interest, deal breakers, etc.) — essential for candidate-relative scoring.
   messages.push({ role: 'system', content: buildPreferencesContext(profile) })
+  const upstreamContext = buildGrowthUpstreamContext(jobFit)
+  if (upstreamContext) messages.push({ role: 'system', content: upstreamContext })
+  if (priorResearch) {
+    const research = buildPriorResearchContext(priorResearch)
+    if (research) messages.push({ role: 'system', content: research })
+  }
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
 {"learning_opportunity":0.0,"brand_value":0.0,"career_trajectory":0.0,"overall_growth":0.0,"highlights":[],"concerns":[],"summary":"","evidences":[]}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
@@ -65,7 +92,7 @@ export async function runGrowthEvaluator(
     messages,
     {
       tools,
-      executeTool,
+      executeTool: exec,
       validate: (r) => {
         const base = validateNumbers(r, [
           'learning_opportunity', 'brand_value', 'career_trajectory', 'overall_growth',

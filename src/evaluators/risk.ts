@@ -1,15 +1,55 @@
 import type { ChatMessage, JsonSchemaSpec } from '@/lib/llm-client'
+import { buildPriorResearchContext } from '@/lib/llm-client'
 import { runAgentWithValidation, executeTool } from '@/lib/agent'
 import type { ToolDefinition } from '@/lib/tools/types'
-import type { RiskResult } from '@/types/evaluation'
+import type { EvidenceItem, JobFitResult, RiskResult, SalaryResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 import type { ToolCall } from '@/lib/tools/types'
+import type { ToolExecutor } from '@/lib/agent'
 import { RISK_SCHEMA } from './schemas'
 
 export const RISK_SCHEMA_NAME = 'risk_result'
 export const RISK_JSON_SCHEMA: JsonSchemaSpec = {
   name: RISK_SCHEMA_NAME,
   schema: RISK_SCHEMA as unknown as Record<string, unknown>,
+}
+
+// Upstream conclusions piped in from the job-fit and salary evaluators, which
+// run first in the staged pipeline. Risk consumes them instead of re-deriving
+// domain fit and compensation from scratch — keeps the flags consistent with
+// what those evaluators concluded and cuts duplicate reasoning / tool calls.
+export interface RiskUpstream {
+  jobFit?: JobFitResult
+  salary?: SalaryResult
+}
+
+function buildRiskUpstreamContext(upstream?: RiskUpstream): string | null {
+  if (!upstream) return null
+  const parts: string[] = []
+  if (upstream.jobFit) {
+    const jf = upstream.jobFit
+    parts.push(`<job_fit_analysis>
+overall_fit: ${jf.overall_fit}
+skill_match: ${jf.skill_match}
+experience_match: ${jf.experience_match}
+matching_skills: ${jf.matching_skills.join(', ') || 'none'}
+gaps: ${jf.gaps.join('; ') || 'none'}
+summary: ${jf.summary}
+</job_fit_analysis>`)
+  }
+  if (upstream.salary) {
+    const s = upstream.salary
+    parts.push(`<salary_analysis>
+estimated_range: ${s.estimated_range.min}-${s.estimated_range.max} ${s.estimated_range.currency}
+expectation_alignment: ${s.expectation_alignment}
+risk_flag: ${s.risk_flag}
+reasoning: ${s.reasoning}
+</salary_analysis>`)
+  }
+  if (!parts.length) return null
+  return `A job-fit analysis and/or salary analysis have already been completed for this candidate and job. Treat their conclusions as authoritative — do NOT re-derive domain fit or compensation from scratch. Use the job-fit gaps to inform under_leveling / overqualification / unrealistic_requirements / domain_pivot_required, and the salary analysis to inform seed_stage_comp_risk / founding_role_undisclosed_comp. Build your risk flags on top of these.
+
+${parts.join('\n')}`
 }
 
 const PROMPT = `You are a job posting risk analyst. Identify red flags across these categories (use the "type" field):
@@ -40,7 +80,10 @@ export async function runRiskEvaluator(
   tools: ToolDefinition[],
   onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
-  jsonSchema?: JsonSchemaSpec
+  jsonSchema?: JsonSchemaSpec,
+  upstream?: RiskUpstream,
+  priorResearch?: EvidenceItem[],
+  exec: ToolExecutor = executeTool
 ): Promise<RiskResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -53,6 +96,12 @@ export async function runRiskEvaluator(
     if (salaryExp) parts.push(`<salary_expectation>${salaryExp}</salary_expectation>`)
     messages.push({ role: 'system', content: `<candidate_experience>\n${parts.join('\n')}\n</candidate_experience>` })
   }
+  const upstreamContext = buildRiskUpstreamContext(upstream)
+  if (upstreamContext) messages.push({ role: 'system', content: upstreamContext })
+  if (priorResearch) {
+    const research = buildPriorResearchContext(priorResearch)
+    if (research) messages.push({ role: 'system', content: research })
+  }
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
 {"overall_risk":"low","flags":[{"type":"other","description":"","severity":"low"}],"summary":"","evidences":[]}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
@@ -63,7 +112,7 @@ export async function runRiskEvaluator(
     messages,
     {
       tools,
-      executeTool,
+      executeTool: exec,
       validate: (r) => {
         if (!['low', 'medium', 'high'].includes(r.overall_risk as string))
           return '"overall_risk" must be "low", "medium", or "high"'

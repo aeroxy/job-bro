@@ -5,6 +5,7 @@ import type { ToolDefinition } from '@/lib/tools/types'
 import type { Verdict } from '@/types/evaluation'
 import type { LLMConfig } from '@/types/profile'
 import type { ToolCall } from '@/lib/tools/types'
+import type { ToolExecutor } from '@/lib/agent'
 import type { EvaluatorResults } from './aggregator'
 import { SUMMARY_SCHEMA } from './schemas'
 
@@ -43,7 +44,8 @@ export async function runSummaryEvaluator(
   tools: ToolDefinition[],
   onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
-  jsonSchema?: JsonSchemaSpec
+  jsonSchema?: JsonSchemaSpec,
+  exec: ToolExecutor = executeTool
 ): Promise<SummaryResult> {
   const userContent = `Score: ${score}/100 | Verdict: ${verdict}
 
@@ -61,7 +63,7 @@ ${toonEncode(evaluatorResults)}
 
   return runAgentWithValidation<SummaryResult>(config, messages, {
     tools,
-    executeTool,
+    executeTool: exec,
     validate: (r) =>
       typeof r.job_summary === 'string' && r.job_summary.trim() &&
       typeof r.reasoning === 'string' && r.reasoning.trim()

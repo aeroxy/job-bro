@@ -5,6 +5,7 @@ import type { ToolDefinition } from '@/lib/tools/types'
 import type { JobFitResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 import type { ToolCall } from '@/lib/tools/types'
+import type { ToolExecutor } from '@/lib/agent'
 import { JOB_FIT_SCHEMA } from './schemas'
 
 export const JOB_FIT_SCHEMA_NAME = 'job_fit_result'
@@ -29,7 +30,7 @@ Critical scoring rules:
 
 Focus strictly on skills, experience, and role scope. Do not comment on salary, compensation, or location — those are evaluated separately.
 
-Evidences: if you used web_search or read_page to inform your answer, list the sources you actually relied on in an "evidences" array of {"title":"","url":"","snippet":""}. Each entry must be a page you read (or a search result you clicked through and read); do not include searches you didn't act on. If you didn't use any tools, emit "evidences": [].`
+Base your assessment on the provided JD and resume — no external lookups. Emit "evidences": [].`
 
 export async function runJobFitEvaluator(
   jobContent: string,
@@ -39,7 +40,8 @@ export async function runJobFitEvaluator(
   tools: ToolDefinition[],
   onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
-  jsonSchema?: JsonSchemaSpec
+  jsonSchema?: JsonSchemaSpec,
+  exec: ToolExecutor = executeTool
 ): Promise<JobFitResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -54,7 +56,7 @@ export async function runJobFitEvaluator(
     messages,
     {
       tools,
-      executeTool,
+      executeTool: exec,
       validate: (r) => {
         const base = validateNumbers(r, ['skill_match', 'experience_match', 'overall_fit']) ??
           (Array.isArray(r.gaps) && Array.isArray(r.strengths) && Array.isArray(r.matching_skills)

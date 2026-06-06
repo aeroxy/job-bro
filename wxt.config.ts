@@ -19,6 +19,9 @@ export default defineConfig({
     plugins: [tailwindcss()],
     define: {
       __VERSION__: JSON.stringify(pkg.version),
+      // Evaluated once at build start — lets the running worker print which
+      // build it actually is, so a stale (un-reloaded) service worker is obvious.
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
     },
     build: {
       minify: false,

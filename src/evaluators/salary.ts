@@ -5,6 +5,7 @@ import type { ToolDefinition } from '@/lib/tools/types'
 import type { SalaryResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 import type { ToolCall } from '@/lib/tools/types'
+import type { ToolExecutor } from '@/lib/agent'
 import { SALARY_SCHEMA } from './schemas'
 
 export const SALARY_SCHEMA_NAME = 'salary_result'
@@ -39,7 +40,8 @@ export async function runSalaryEvaluator(
   tools: ToolDefinition[],
   onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
-  jsonSchema?: JsonSchemaSpec
+  jsonSchema?: JsonSchemaSpec,
+  exec: ToolExecutor = executeTool
 ): Promise<SalaryResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -54,7 +56,7 @@ export async function runSalaryEvaluator(
     messages,
     {
       tools,
-      executeTool,
+      executeTool: exec,
       validate: (r) => {
         if (!r.estimated_range || typeof r.estimated_range !== 'object')
           return '"estimated_range" must be an object with min/max/currency'

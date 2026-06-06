@@ -2,6 +2,7 @@ import { jsonrepair } from 'jsonrepair'
 
 import { chatCompletionChrome } from './chrome-ai-client'
 import type { LLMConfig, UserProfile } from '@/types/profile'
+import type { EvidenceItem } from '@/types/evaluation'
 import type { ChatCompletionWithToolsResult, ToolCall, ToolDefinition } from './tools/types'
 
 export interface ChatMessage {
@@ -123,7 +124,7 @@ export async function chatCompletion(
     const url = `${baseUrl}/chat/completions`
 
     let lastError: Error | null = null
-    const httpRetryDelays = [1000, 3000]
+    const httpRetryDelays = [3000, 10000]
 
     for (let attempt = 0; attempt <= 2; attempt++) {
       const controller = new AbortController()
@@ -155,7 +156,7 @@ export async function chatCompletion(
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => 'Unknown error')
-          const retryable = [429, 500, 502, 503].includes(response.status)
+          const retryable = [429, 500, 502, 503, 504].includes(response.status)
 
           if (retryable && attempt < 2) {
             lastError = new Error(`HTTP ${response.status}: ${errorText}`)
@@ -275,7 +276,7 @@ async function streamCompletion(
   const url = `${baseUrl}/chat/completions`
 
   let lastError: Error | null = null
-  const httpRetryDelays = [1000, 3000]
+  const httpRetryDelays = [3000, 10000]
 
   for (let attempt = 0; attempt <= 2; attempt++) {
     const controller = new AbortController()
@@ -475,7 +476,7 @@ async function toolCompletionRequest(
   if (!baseUrl) throw new Error('LLM base URL is not configured')
   const url = `${baseUrl}/chat/completions`
 
-  const httpRetryDelays = [1000, 3000]
+  const httpRetryDelays = [3000, 10000]
   let lastError: Error | null = null
 
   for (let attempt = 0; attempt <= 2; attempt++) {
@@ -583,5 +584,23 @@ export function buildPreferencesContext(profile: UserProfile): string {
   if (prefs.years_of_experience > 0)
     parts.push(`<years_of_experience>${prefs.years_of_experience}</years_of_experience>`)
   return `<preferences>\n${parts.join('\n')}\n</preferences>`
+}
+
+// Sources gathered by upstream evaluators, injected into the downstream stage
+// (risk, growth) so they inherit prior research instead of re-searching. We
+// pass the distilled {title,url,snippet} — not the full page markdown — to keep
+// the prompt lean; a downstream read_page on a listed URL is a cache hit.
+// Returns null when there's nothing to inject (no system message added).
+export function buildPriorResearchContext(evidences: EvidenceItem[]): string | null {
+  if (!evidences.length) return null
+  const lines = evidences.map((e) => {
+    const snippet = e.snippet?.trim() ? ` — ${e.snippet.trim()}` : ''
+    return `- ${e.title?.trim() || e.url} (${e.url})${snippet}`
+  })
+  return `Earlier analysis steps already researched this company/role and found the sources below. Treat them as known context. Only call web_search / read_page if you need detail they don't cover — re-reading a listed URL is cheap (it's cached), but don't repeat searches that produced these.
+
+<prior_research>
+${lines.join('\n')}
+</prior_research>`
 }
 

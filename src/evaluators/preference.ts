@@ -5,6 +5,7 @@ import type { ToolDefinition } from '@/lib/tools/types'
 import type { PreferenceResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 import type { ToolCall } from '@/lib/tools/types'
+import type { ToolExecutor } from '@/lib/agent'
 import { PREFERENCE_SCHEMA } from './schemas'
 
 export const PREFERENCE_SCHEMA_NAME = 'preference_result'
@@ -37,7 +38,8 @@ export async function runPreferenceEvaluator(
   tools: ToolDefinition[],
   onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
-  jsonSchema?: JsonSchemaSpec
+  jsonSchema?: JsonSchemaSpec,
+  exec: ToolExecutor = executeTool
 ): Promise<PreferenceResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -52,7 +54,7 @@ export async function runPreferenceEvaluator(
     messages,
     {
       tools,
-      executeTool,
+      executeTool: exec,
       validate: (r) => {
         const base = validateNumbers(r, ['alignment_score']) ??
           (Array.isArray(r.conflicts) && Array.isArray(r.matches)
