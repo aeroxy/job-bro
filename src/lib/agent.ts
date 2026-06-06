@@ -68,6 +68,9 @@ function toolCacheKey(call: ToolCall): string | null {
   let args: Record<string, unknown>
   try {
     args = JSON.parse(call.function.arguments)
+    // JSON.parse succeeds on `"null"`, `"42"`, etc.; guard so the property
+    // access below can't throw a TypeError on a non-object (matches executeTool).
+    if (!args || typeof args !== 'object') return null
   } catch {
     return null
   }
