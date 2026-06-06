@@ -1,5 +1,7 @@
 use bun for package management
 
+use bun typecheck
+
 be concise
 
 read and update wiki below when needed
