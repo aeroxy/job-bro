@@ -5,7 +5,7 @@
 import { runResumeGenerator } from '@/evaluators/resume'
 import { runAllEvaluators } from '@/evaluators/runner'
 import { jobToMarkdown } from '@/extractor/markdown'
-import { SYSTEM_PROMPT_SEPARATOR } from '@/lib/chrome-prompt-client'
+import { SYSTEM_PROMPT_SEPARATOR } from '@/lib/chrome-ai-client'
 import { chatCompletion } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
 import { getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
@@ -46,7 +46,7 @@ async function loadConfigAndProfile(): Promise<
   }
 
   const customPrompt = await getCustomPrompt(config.backend)
-  return { ok: true, profile, config, customPrompt }
+  return { ok: true, profile, config, customPrompt: customPrompt.trim() }
 }
 
 export async function runAnalysis(
@@ -62,7 +62,7 @@ export async function runAnalysis(
       job,
       loaded.profile,
       loaded.config,
-      loaded.customPrompt || undefined,
+      loaded.customPrompt,
       onProgress,
       signal,
     )

@@ -173,3 +173,57 @@ Supports iterative refinement: each regeneration receives the previous version a
 - `validateNumbers(obj, fields)` — asserts numeric fields are in 0–1 range
 - HTTP retry on 429/5xx with backoff delays: 1 s → 3 s
 - 30-second request timeout
+
+## Agent Loop & Tools
+
+Every evaluator runs through the **agent loop** in `src/lib/agent.ts`. The loop drives the LLM with tool-calling until it produces a final content message (no `tool_calls`); that final content is parsed as JSON like any other evaluator output.
+
+### How the agent loop works
+
+1. Send messages → `chatCompletionWithTools` (adds `tools` to the request body)
+2. If the response has `tool_calls`:
+   - Append the assistant message
+   - For each call: invoke `executeTool(call, signal)`, append a `tool` role message with the result
+3. Else: return the content
+4. Cap at `MAX_AGENT_ITERATIONS = 8` iterations
+
+For the Chrome AI backend (Gemini Nano), tools aren't supported natively — the request goes through without `tools`, the response has no `tool_calls`, and the loop terminates after one iteration. Behavior matches the pre-agent path.
+
+### Tool call protocol
+
+- Request: `tools: [{ type: 'function', function: { name, description, parameters } }]`
+- Response: `choices[0].message.tool_calls: [{ id, type, function: { name, arguments } }]`
+- Tool result: `{ role: 'tool', tool_call_id, content }`
+
+### Available tools
+
+Defined in `src/lib/tools/definitions.ts`:
+
+| Tool | Args | Behavior |
+|---|---|---|
+| `google_search` | `query: string` | `fetch` Google, strip `<script>`/`<style>`, trim to first `<h1>Search Results</h1>`, convert remainder to markdown |
+| `read_page` | `url: string` | `fetch` any HTTP(S) URL, strip `<script>`/`<style>`, convert to markdown |
+
+### Tool execution pipeline
+
+```
+agent loop (service worker or sidepanel)
+  └─ executeTool(call, signal)
+       └─ googleSearch / readPage  (lib/tools/handlers.ts)
+            ├─ fetch(url)             ← service worker does the fetch
+            └─ chrome.runtime.sendMessage({ type: 'PARSE_HTML', html, trimToAnchor? })
+                 │
+                 ▼
+            offscreen document  (src/entrypoints/offscreen/)
+                 └─ DOMParser + Turndown  ← the "invisible place"
+```
+
+The **offscreen document** (`src/entrypoints/offscreen.html`) is created eagerly by the service worker on install via `chrome.offscreen.createDocument` (reason: `DOM_PARSER`). It runs DOMParser + Turndown so the service worker stays free of heavy HTML work and is shielded from MV3 worker lifecycle issues.
+
+The service worker's `onMessage` listener returns `false` for `PARSE_HTML` messages, letting the offscreen's listener claim the `sendResponse`. This avoids the "first-listener-wins" trap of `chrome.runtime.sendMessage` broadcasting to all extension pages.
+
+### `runAgentWithValidation`
+
+`runAgentWithValidation<T>()` (`src/lib/agent.ts`) is the agent-aware replacement for `runWithValidation`. It runs the agent loop, parses the final content as JSON, validates, and retries once on parse/validation failure — same semantics as `runWithValidation`, but tools are available.
+
+All 5 evaluators + the summary evaluator use it. The Risk evaluator's prompt explicitly mentions the available tools, since looking up unknown companies is its primary use case. Other evaluators can opt in by adding a similar note.

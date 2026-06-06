@@ -1,6 +1,7 @@
 import { encode as toonEncode } from '@toon-format/toon'
-import { chatCompletion } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
+import { runAgentWithValidation, executeTool } from '@/lib/agent'
+import { ALL_TOOLS } from '@/lib/tools/definitions'
 import type { Verdict } from '@/types/evaluation'
 import type { LLMConfig } from '@/types/profile'
 import type { EvaluatorResults } from './aggregator'
@@ -47,12 +48,13 @@ ${toonEncode(evaluatorResults)}
   messages.push({ role: 'user', content: PROMPT })
   messages.push({ role: 'user', content: userContent })
 
-  const raw = await chatCompletion(config, messages, {
-    json_mode: true,
-    max_tokens: 500,
-    temperature: 0.3,
+  return runAgentWithValidation<SummaryResult>(config, messages, {
+    tools: ALL_TOOLS,
+    executeTool,
+    validate: (r) =>
+      typeof r.job_summary === 'string' && typeof r.reasoning === 'string'
+        ? null
+        : '"job_summary" and "reasoning" must be strings',
     signal,
   })
-
-  return JSON.parse(raw) as SummaryResult
 }

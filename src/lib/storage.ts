@@ -9,10 +9,6 @@ const KEYS = {
   customPromptChrome: 'jobBroCustomPromptChrome',
 } as const
 
-function customPromptKey(backend?: LLMBackend): string {
-  return backend === 'chrome-prompt' ? KEYS.customPromptChrome : KEYS.customPrompt
-}
-
 export async function getProfile(): Promise<UserProfile | null> {
   const result = await chrome.storage.local.get(KEYS.profile)
   return result[KEYS.profile] ?? null

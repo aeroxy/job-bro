@@ -1,5 +1,7 @@
-import { runWithValidation, buildSalaryContext } from '@/lib/llm-client'
+import { buildSalaryContext } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
+import { runAgentWithValidation, executeTool } from '@/lib/agent'
+import { ALL_TOOLS } from '@/lib/tools/definitions'
 import type { SalaryResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 
@@ -23,30 +25,34 @@ export async function runSalaryEvaluator(
   jobContent: string,
   profile: UserProfile,
   config: LLMConfig,
-  customPrompt?: string,
+  customPrompt: string,
   signal?: AbortSignal
 ): Promise<SalaryResult> {
   const messages: ChatMessage[] = []
-  if (customPrompt?.trim()) messages.push({ role: 'system', content: customPrompt.trim() })
+  if (customPrompt) messages.push({ role: 'system', content: customPrompt })
   messages.push({ role: 'system', content: buildSalaryContext(profile) })
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
 {"estimated_range":{"min":0,"max":0,"currency":"USD"},"expectation_alignment":"within","risk_flag":false,"reasoning":""}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
   messages.push({ role: 'user', content: PROMPT })
 
-  return runWithValidation<SalaryResult>(
+  return runAgentWithValidation<SalaryResult>(
     config,
     messages,
-    (r) => {
-      if (!r.estimated_range || typeof r.estimated_range !== 'object')
-        return '"estimated_range" must be an object with min/max/currency'
-      const range = r.estimated_range as Record<string, unknown>
-      if (typeof range.min !== 'number' || typeof range.max !== 'number')
-        return '"estimated_range.min" and "max" must be numbers'
-      if (!['below', 'within', 'above'].includes(r.expectation_alignment as string))
-        return '"expectation_alignment" must be "below", "within", or "above"'
-      return null
-    },
-    signal
+    {
+      tools: ALL_TOOLS,
+      executeTool,
+      validate: (r) => {
+        if (!r.estimated_range || typeof r.estimated_range !== 'object')
+          return '"estimated_range" must be an object with min/max/currency'
+        const range = r.estimated_range as Record<string, unknown>
+        if (typeof range.min !== 'number' || typeof range.max !== 'number')
+          return '"estimated_range.min" and "max" must be numbers'
+        if (!['below', 'within', 'above'].includes(r.expectation_alignment as string))
+          return '"expectation_alignment" must be "below", "within", or "above"'
+        return null
+      },
+      signal,
+    }
   )
 }

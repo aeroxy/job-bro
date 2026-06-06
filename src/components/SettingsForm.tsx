@@ -1,4 +1,4 @@
-import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -29,7 +29,7 @@ export function SettingsForm({
   customPromptChrome,
   onSaveLLMProfile,
   onDeleteLLMProfile,
-  onSelectLLMProfile,
+  onSelectLLMProfile: _onSelectLLMProfile,
   onSavePromptChrome,
   onBack,
 }: SettingsFormProps) {

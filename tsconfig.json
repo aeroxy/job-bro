@@ -6,6 +6,10 @@
     "noEmit": false,
     "allowImportingTsExtensions": false,
     "strictNullChecks": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   }
 }
