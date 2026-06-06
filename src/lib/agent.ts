@@ -120,11 +120,15 @@ export function createCachedExecutor(base: ToolExecutor = executeTool): ToolExec
   }
 }
 
+// Returns the final content plus the accumulated transcript (assistant tool
+// calls + tool results). Callers that retry on a bad final answer reuse
+// `messages` so the retry keeps the gathered tool context instead of
+// re-researching from scratch.
 export async function runAgent(
   config: LLMConfig,
   messages: ChatMessage[],
   options: AgentOptions
-): Promise<string> {
+): Promise<{ content: string; messages: ChatMessage[] }> {
   const { tools, executeTool, signal, onToolCall, maxIterations = MAX_AGENT_ITERATIONS, jsonSchema } = options
   const working: ChatMessage[] = [...messages]
 
@@ -135,7 +139,7 @@ export async function runAgent(
     const response = await chatCompletionWithTools(config, working, { tools, signal, jsonSchema })
 
     if (!response.tool_calls?.length) {
-      return response.content
+      return { content: response.content, messages: working }
     }
 
     working.push({
@@ -181,31 +185,33 @@ export async function runAgentWithValidation<T extends object>(
 ): Promise<T> {
   const { validate, ...agentOpts } = options
 
-  const raw = await runAgent(config, messages, agentOpts)
+  // Reuse the agent's accumulated transcript (tool calls + results) on retry so
+  // the correction step keeps the gathered context instead of re-researching.
+  const { content: raw, messages: history } = await runAgent(config, messages, agentOpts)
   try {
     const parsed = parseJSON<T>(raw)
     const error = validate(parsed)
     if (!error) return parsed
-    return await retry<T>(config, messages, agentOpts, raw, error, validate)
+    return await retry<T>(config, history, agentOpts, raw, error, validate)
   } catch (parseError) {
-    return await retry<T>(config, messages, agentOpts, raw, `Could not parse JSON: ${(parseError as Error).message}`, validate)
+    return await retry<T>(config, history, agentOpts, raw, `Could not parse JSON: ${(parseError as Error).message}`, validate)
   }
 }
 
 async function retry<T extends object>(
   config: LLMConfig,
-  messages: ChatMessage[],
+  history: ChatMessage[],
   agentOpts: AgentOptions,
   badResponse: string,
   errorMessage: string,
   validate: (result: T) => string | null
 ): Promise<T> {
   const retryMessages: ChatMessage[] = [
-    ...messages,
+    ...history,
     { role: 'assistant', content: badResponse },
     { role: 'user', content: `${errorMessage}. Fix it and output compact JSON only.` },
   ]
-  const retryRaw = await runAgent(config, retryMessages, agentOpts)
+  const { content: retryRaw } = await runAgent(config, retryMessages, agentOpts)
   // Re-validate the retry too — otherwise invalid-but-parseable JSON would slip
   // through and callers' Promise<T> contract (and downstream scoring) breaks.
   const parsed = parseJSON<T>(retryRaw)
