@@ -58,6 +58,59 @@ export const executeTool: ToolExecutor = async (call, signal) => {
   }
 }
 
+// Build a stable cache key for a tool call so identical web_search / read_page
+// calls resolve to one fetch. Returns null for calls we shouldn't cache
+// (malformed args, unknown tool) so they always hit the network.
+function toolCacheKey(call: ToolCall): string | null {
+  let args: Record<string, unknown>
+  try {
+    args = JSON.parse(call.function.arguments)
+  } catch {
+    return null
+  }
+  switch (call.function.name) {
+    case 'web_search': {
+      const q = String(args.query ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+      return q ? `search:${q}` : null
+    }
+    case 'read_page': {
+      const raw = String(args.url ?? '').trim()
+      if (!raw) return null
+      try {
+        const u = new URL(raw)
+        u.hash = ''
+        return `read:${u.toString().toLowerCase()}`
+      } catch {
+        return `read:${raw.toLowerCase()}`
+      }
+    }
+    default:
+      return null
+  }
+}
+
+// Wrap a ToolExecutor with a per-run cache so the same company page / search
+// isn't fetched once per evaluator. Promises are cached (not just results), so
+// concurrent identical calls share a single in-flight fetch; a rejected call
+// is evicted so a transient failure can be retried. Create one per analysis run
+// and share it across all evaluators — the staged pipeline means downstream
+// evaluators (risk, growth) reuse pages already fetched upstream for free.
+export function createCachedExecutor(base: ToolExecutor = executeTool): ToolExecutor {
+  const inflight = new Map<string, Promise<string>>()
+  return (call, signal) => {
+    const key = toolCacheKey(call)
+    if (!key) return base(call, signal)
+    const existing = inflight.get(key)
+    if (existing) return existing
+    const p = base(call, signal).catch((e) => {
+      inflight.delete(key)
+      throw e
+    })
+    inflight.set(key, p)
+    return p
+  }
+}
+
 export async function runAgent(
   config: LLMConfig,
   messages: ChatMessage[],

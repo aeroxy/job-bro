@@ -2,6 +2,10 @@ import { runAnalysis, runChat, runResume } from '@/lib/llm-handlers'
 import type { EvaluatorResultCallback, ToolCallCallback } from '@/lib/llm-handlers'
 import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
 
+// Runs on every service-worker startup — confirms which build is live so a
+// stale (un-reloaded) worker is immediately obvious in the console.
+console.log(`[Job Bro] service worker init — v${__VERSION__}, built ${__BUILD_TIME__}`)
+
 const analysisControllers = new Map<number, AbortController>()
 const resumeControllers = new Map<number, AbortController>()
 
