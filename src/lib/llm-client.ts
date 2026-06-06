@@ -80,6 +80,18 @@ function getQueue(baseUrl: string): RequestQueue {
   return q
 }
 
+// Some reasoning models (e.g. MiniMax) emit their chain-of-thought inline as a
+// leading <think>…</think> block in `content` instead of a separate
+// reasoning_content field. Strip a leading block so downstream JSON parsing and
+// display see only the answer. Only a leading block is removed; if the closing
+// tag is missing (truncated reasoning), the content is left untouched.
+export function stripThinkBlock(content: string): string {
+  if (!content.trimStart().startsWith('<think>')) return content
+  const close = content.indexOf('</think>')
+  if (close === -1) return content
+  return content.slice(close + '</think>'.length).trimStart()
+}
+
 export async function chatCompletion(
   config: LLMConfig,
   messages: ChatMessage[],
@@ -175,7 +187,7 @@ export async function chatCompletion(
           throw new Error('LLM returned empty response')
         }
 
-        return content
+        return stripThinkBlock(content)
       } catch (e) {
         clearTimeout(timeout)
         throw e instanceof Error ? e : new Error(String(e))
@@ -372,7 +384,7 @@ async function streamCompletion(
         if (finishReason === 'length') throw new Error(truncatedMessage(max_tokens))
         throw new Error('LLM returned empty streaming response')
       }
-      return content
+      return stripThinkBlock(content)
 
     } catch (e) {
       clearTimeout(inactivityTimer!)
@@ -531,7 +543,7 @@ async function toolCompletionRequest(
         throw new Error(truncatedMessage(max_tokens))
       }
       return {
-        content: message.content ?? '',
+        content: stripThinkBlock(message.content ?? ''),
         tool_calls: hasToolCalls ? tool_calls : undefined,
       }
     } catch (e) {
