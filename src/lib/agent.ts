@@ -83,11 +83,14 @@ function toolCacheKey(call: ToolCall): string | null {
       const raw = String(args.url ?? '').trim()
       if (!raw) return null
       try {
+        // new URL() already lowercases the case-insensitive parts (scheme +
+        // host); don't lowercase the whole thing — path/query are
+        // case-sensitive, so doing so would collide distinct pages onto one key.
         const u = new URL(raw)
         u.hash = ''
-        return `read:${u.toString().toLowerCase()}`
+        return `read:${u.toString()}`
       } catch {
-        return `read:${raw.toLowerCase()}`
+        return `read:${raw}`
       }
     }
     default:

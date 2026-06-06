@@ -312,7 +312,7 @@ async function streamCompletion(
       if (!response.ok) {
         clearTimeout(inactivityTimer!)
         const errorText = await response.text().catch(() => 'Unknown error')
-        const retryable = [429, 500, 502, 503].includes(response.status)
+        const retryable = [429, 500, 502, 503, 504].includes(response.status)
 
         if (retryable && attempt < 2) {
           lastError = new Error(`HTTP ${response.status}: ${errorText}`)
@@ -508,7 +508,7 @@ async function toolCompletionRequest(
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error')
-        const retryable = [429, 500, 502, 503].includes(response.status)
+        const retryable = [429, 500, 502, 503, 504].includes(response.status)
         if (retryable && attempt < 2) {
           lastError = new Error(`HTTP ${response.status}: ${errorText}`)
           await delay(httpRetryDelays[attempt])
