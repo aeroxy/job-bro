@@ -14,7 +14,7 @@ export const WEB_SEARCH_TOOL: ToolDefinition = {
       properties: {
         query: {
           type: 'string',
-          description: 'Search query. Use clear, specific keywords joined by +.',
+          description: 'Search query — a normal phrase or space-separated keywords. The handler URL-encodes it for you; do not add "+" between words.',
         },
       },
       required: ['query'],

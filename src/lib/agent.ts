@@ -117,9 +117,9 @@ export async function runAgentWithValidation<T extends object>(
     const parsed = parseJSON<T>(raw)
     const error = validate(parsed)
     if (!error) return parsed
-    return await retry<T>(config, messages, agentOpts, raw, error)
+    return await retry<T>(config, messages, agentOpts, raw, error, validate)
   } catch (parseError) {
-    return await retry<T>(config, messages, agentOpts, raw, `Could not parse JSON: ${(parseError as Error).message}`)
+    return await retry<T>(config, messages, agentOpts, raw, `Could not parse JSON: ${(parseError as Error).message}`, validate)
   }
 }
 
@@ -128,7 +128,8 @@ async function retry<T extends object>(
   messages: ChatMessage[],
   agentOpts: AgentOptions,
   badResponse: string,
-  errorMessage: string
+  errorMessage: string,
+  validate: (result: T) => string | null
 ): Promise<T> {
   const retryMessages: ChatMessage[] = [
     ...messages,
@@ -136,5 +137,10 @@ async function retry<T extends object>(
     { role: 'user', content: `${errorMessage}. Fix it and output compact JSON only.` },
   ]
   const retryRaw = await runAgent(config, retryMessages, agentOpts)
-  return parseJSON<T>(retryRaw)
+  // Re-validate the retry too — otherwise invalid-but-parseable JSON would slip
+  // through and callers' Promise<T> contract (and downstream scoring) breaks.
+  const parsed = parseJSON<T>(retryRaw)
+  const error = validate(parsed)
+  if (error) throw new Error(`Validation failed after retry: ${error}`)
+  return parsed
 }

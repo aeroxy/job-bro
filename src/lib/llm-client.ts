@@ -445,8 +445,13 @@ async function toolCompletionRequest(
     model: config.model,
     messages,
     max_tokens,
-    tools,
-    tool_choice,
+  }
+  // Only advertise tools when there are any. Some OpenAI-compatible backends
+  // reject an empty `tools: []` (with `tool_choice`), and tools are disabled
+  // precisely by resolving to an empty array.
+  if (tools.length > 0) {
+    body.tools = tools
+    body.tool_choice = tool_choice
   }
   if (temperature !== undefined) body.temperature = temperature
 

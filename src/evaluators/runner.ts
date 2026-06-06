@@ -135,18 +135,27 @@ export async function runAllEvaluators(
 
   const evaluators = { job_fit: jobFit, salary, preference, risk, growth }
 
-  console.log('evaluators result', evaluators)
-
   // Summary runs after — it depends on all evaluator results. It can also
   // benefit from tools (e.g. looking up the company's industry), so it
   // respects the same flag.
   const score = getScore(evaluators)
   const verdict = getVerdict(score, evaluators)
 
+  // The summary must not be a single point of failure: the 5 evaluators above
+  // may have already succeeded, so a summary error should still yield a report
+  // with their cards intact. Cancellation (AbortError) still propagates.
   onProgress?.('summary', 'running')
-  const summary = await runSummaryEvaluator(jobMarkdown, evaluators, score, verdict, config, customPrompt, tools, signal, summarySchema)
-  onProgress?.('summary', 'completed')
-  onEvaluatorResult?.('summary', summary)
+  let summary: { job_summary: string; reasoning: string }
+  try {
+    summary = await runSummaryEvaluator(jobMarkdown, evaluators, score, verdict, config, customPrompt, tools, forEvaluator('summary'), signal, summarySchema)
+    onProgress?.('summary', 'completed')
+    onEvaluatorResult?.('summary', summary)
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
+    console.error('[evaluator:summary] failed:', e)
+    onProgress?.('summary', 'error')
+    summary = { job_summary: '', reasoning: 'Summary generation failed.' }
+  }
 
   return aggregate(job, evaluators, summary.reasoning, summary.job_summary)
 }

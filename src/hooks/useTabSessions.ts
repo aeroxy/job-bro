@@ -12,6 +12,7 @@ import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
 import type { LLMConfig } from '@/types/profile'
 import type { AnalysisProgressMessage } from '@/types/messages'
+import type { ToolCall } from '@/lib/tools/types'
 import { deleteSession, getSessionByJobId, saveSession } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
 import { runAnalysis, runResume } from '@/lib/llm-handlers'
@@ -697,13 +698,53 @@ export function useTabSessions(
       // callback (e.g. fired after reset). updateSessionAndRender would
       // auto-create otherwise.
       if (!session) return
+      if (!isEvaluatorSlot(evaluator)) return
+      // Clear any in-flight tool activity for this evaluator once it finishes,
+      // matching the remote path's status handler.
+      const nextActivity: EvaluatorActivity = { ...session.activity }
+      if (status === 'completed' || status === 'error') {
+        delete (nextActivity as Record<string, unknown>)[evaluator]
+      }
       updateSessionAndRender(tabId, {
         progress: { ...session.progress, [evaluator]: status },
+        activity: nextActivity,
+      })
+    }
+
+    // Per-evaluator monotonic counter so the latest in-flight tool activity
+    // supersedes the previous one for the same evaluator's display row.
+    const toolSeq = new Map<string, number>()
+    const onToolCall = (evaluator: string, call: ToolCall) => {
+      const session = sessionsRef.current.get(tabId)
+      if (!session) return
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return
+      if (!isEvaluatorSlot(evaluator)) return
+      const name = call.function.name
+      if (name !== 'web_search' && name !== 'read_page') return
+      let display = ''
+      try {
+        const args = JSON.parse(call.function.arguments) as Record<string, unknown>
+        display = String((name === 'web_search' ? args.query : args.url) ?? '')
+      } catch { /* malformed args — show an empty label */ }
+      const seq = (toolSeq.get(evaluator) ?? 0) + 1
+      toolSeq.set(evaluator, seq)
+      updateSessionAndRender(tabId, {
+        activity: { ...session.activity, [evaluator]: { name, display, seq } },
+      })
+    }
+
+    const onResult = (evaluator: string, result: unknown) => {
+      const session = sessionsRef.current.get(tabId)
+      if (!session) return
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return
+      if (!isEvaluatorSlot(evaluator)) return
+      updateSessionAndRender(tabId, {
+        evaluatorResults: { ...session.evaluatorResults, [evaluator]: result },
       })
     }
 
     try {
-      const result = await runAnalysis(extractedJob, controller.signal, onProgress)
+      const result = await runAnalysis(extractedJob, controller.signal, onProgress, onToolCall, onResult)
       if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
       if (cancelledRef.current.has(tabId)) return null
       if (result.ok) {
