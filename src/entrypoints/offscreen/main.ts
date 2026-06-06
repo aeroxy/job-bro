@@ -8,10 +8,10 @@
 // FIFO queue, so concurrent callers (service worker evaluators, sidepanel
 // chat, download trigger) all serialize on the one in-process model.
 
-import { parseGenericPage, parseGoogleSearchResults } from '@/lib/html-to-markdown'
+import { parseHtmlToMarkdown } from '@/lib/html-to-markdown'
 import type { ChatMessage } from '@/lib/llm-client'
 
-type ParseRequest = { type: 'PARSE_HTML'; html: string; mode: 'google_search' | 'read_page' }
+type ParseRequest = { type: 'PARSE_HTML'; html: string }
 
 type SessionCreateRequest = {
   type: 'CHROME_AI_SESSION_CREATE'
@@ -216,10 +216,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'PARSE_HTML') {
     const req = message as ParseRequest
     try {
-      const result = req.mode === 'google_search'
-        ? parseGoogleSearchResults(req.html)
-        : parseGenericPage(req.html)
-      Promise.resolve(result)
+      Promise.resolve(parseHtmlToMarkdown(req.html))
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ markdown: `__PARSE_ERROR__:${(e as Error).message}`, trimmed: false }))
     } catch (e) {

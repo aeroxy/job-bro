@@ -1,6 +1,7 @@
 import type {
   AggregatedReport,
   EvaluatorStatus,
+  EvidenceItem,
   GrowthResult,
   JobFitResult,
   PreferenceResult,
@@ -16,6 +17,32 @@ export interface EvaluatorResults {
   preference: EvaluatorStatus<PreferenceResult>
   risk: EvaluatorStatus<RiskResult>
   growth: EvaluatorStatus<GrowthResult>
+}
+
+// Collect every `evidences` entry across all evaluator results, deduplicating
+// by URL and tagging each item with the evaluators that cited it. URLs are
+// the natural key; we treat query-string variants as the same source.
+function collectReferences(evaluators: EvaluatorResults): EvidenceItem[] {
+  const byUrl = new Map<string, EvidenceItem>()
+  for (const [name, status] of Object.entries(evaluators) as [string, EvaluatorStatus<{ evidences?: EvidenceItem[] }>][]) {
+    if (status.status !== 'fulfilled' || !status.result) continue
+    for (const ev of status.result.evidences ?? []) {
+      if (!ev?.url) continue
+      const key = ev.url.split('#')[0]!.split('?')[0]!.toLowerCase()
+      const existing = byUrl.get(key)
+      if (existing) {
+        existing.cited_by = Array.from(new Set([...(existing.cited_by ?? []), name]))
+      } else {
+        byUrl.set(key, {
+          title: ev.title ?? ev.url,
+          url: ev.url,
+          snippet: ev.snippet,
+          cited_by: [name],
+        })
+      }
+    }
+  }
+  return Array.from(byUrl.values())
 }
 
 // Coerce any value to a finite number, defaulting to 0 if NaN/null/undefined
@@ -200,5 +227,6 @@ export function aggregate(
     key_risks,
     negotiation_tips,
     evaluators,
+    references: collectReferences(evaluators),
   }
 }

@@ -1,5 +1,17 @@
 import type { ExtractedJob } from './job'
 
+// A source the LLM actually read or cited while forming an answer. Populated
+// from the tool pipeline (web_search / read_page results), so the final
+// report can show the user where each evaluator's conclusions came from.
+export interface EvidenceItem {
+  title: string
+  url: string
+  snippet?: string
+  // Which evaluator(s) cited this source. Filled in by the aggregator when
+  // collecting across evaluators; not present on per-evaluator outputs.
+  cited_by?: string[]
+}
+
 // --- Individual evaluator results ---
 
 export interface JobFitResult {
@@ -10,6 +22,7 @@ export interface JobFitResult {
   gaps: string[]
   strengths: string[]
   summary: string
+  evidences: EvidenceItem[]
 }
 
 export interface SalaryResult {
@@ -17,6 +30,7 @@ export interface SalaryResult {
   expectation_alignment: 'below' | 'within' | 'above'
   risk_flag: boolean
   reasoning: string
+  evidences: EvidenceItem[]
 }
 
 export interface PreferenceResult {
@@ -24,6 +38,7 @@ export interface PreferenceResult {
   conflicts: PreferenceConflict[]
   matches: string[]
   summary: string
+  evidences: EvidenceItem[]
 }
 
 export interface PreferenceConflict {
@@ -37,6 +52,7 @@ export interface RiskResult {
   overall_risk: 'low' | 'medium' | 'high'
   flags: RiskFlag[]
   summary: string
+  evidences: EvidenceItem[]
 }
 
 export interface RiskFlag {
@@ -60,6 +76,7 @@ export interface GrowthResult {
   highlights: string[]
   concerns: string[]
   summary: string
+  evidences: EvidenceItem[]
 }
 
 // --- Aggregated result ---
@@ -88,4 +105,7 @@ export interface AggregatedReport {
     risk: EvaluatorStatus<RiskResult>
     growth: EvaluatorStatus<GrowthResult>
   }
+  // Unique sources used across all evaluators, with the citing evaluators
+  // attached. Aggregated from `evidences` in each evaluator result.
+  references: EvidenceItem[]
 }

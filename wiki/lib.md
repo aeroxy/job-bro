@@ -14,8 +14,10 @@ If `config.backend === 'chrome-prompt'`, delegates to `chatCompletionChrome`. Ot
 
 Options:
 - `json_mode: boolean` — sets `response_format: { type: "json_object" }`
-- `temperature: number`
-- `max_tokens: number`
+- `temperature: number` — resolved as `options.temperature ?? config.temperature`. Omitted from the request body entirely when unset, so the provider applies its own default (some reasoning models reject/ignore an explicit temperature).
+- `max_tokens: number` — resolved as `options.max_tokens ?? config.max_tokens ?? 8192`. The default is deliberately high: reasoning models count `reasoning_content` against `max_tokens`, so a low budget gets fully consumed by reasoning, returning empty content with `finish_reason: 'length'`.
+
+**Truncation handling:** when the response has `finish_reason: 'length'` and no usable output (empty content, no tool_calls), the client throws an actionable error ("Raise Max Tokens in settings") instead of returning `''` and tripping a downstream JSON parse error. Applies to all three paths (non-stream, tools, stream).
 
 **Retry behavior:**
 - HTTP 429 / 5xx: retries with delays `[1000ms, 3000ms]`
@@ -33,23 +35,15 @@ Non-streaming tool-call variant. Same HTTP plumbing, but `tools` is forwarded as
 ### `parseJSON<T>(raw)`
 
 Robust JSON parsing for LLM output:
-1. Attempts direct `JSON.parse`
-2. Strips Markdown code fences (` ```json ... ``` `)
-3. Extracts outermost `{...}` or `[...]` block
+1. Strips a Markdown code fence (` ```json ... ``` `) or isolates the outermost `{...}` block
+2. Attempts `JSON.parse`
+3. On failure, falls back to `jsonrepair` (fixes unescaped quotes/newlines, trailing commas, truncated tails) before throwing a descriptive error
 
 ---
 
 ### `validateNumbers(obj, fields)`
 
 Asserts that all listed fields on `obj` are numbers in range 0–1. Throws on violation.
-
----
-
-### `buildMessages(customPrompt, internalPrompt, userContent)`
-
-Assembles the `messages` array for a chat completion:
-1. If `customPrompt` is set, prepends it to `internalPrompt` as the system message
-2. Adds user content as final message
 
 ---
 
@@ -95,25 +89,23 @@ Tool definitions + handlers, shared across evaluators.
 
 ### `definitions.ts`
 Two tools, both OpenAI-compatible function-calling schemas:
-- `GOOGLE_SEARCH_TOOL` — `{ query: string }`. Run by the service worker: fetch `https://www.google.com/search?q=...`, then `PARSE_HTML` to offscreen with `mode: 'google_search'`.
-- `READ_PAGE_TOOL` — `{ url: string }`. Fetch (with `AbortSignal.timeout(20s)`), then `PARSE_HTML` with `mode: 'read_page'`.
+- `WEB_SEARCH_TOOL` — `{ query: string }`. Run by the service worker: fetch `https://html.duckduckgo.com/html?q=...`, then `PARSE_HTML` to offscreen.
+- `READ_PAGE_TOOL` — `{ url: string }`. Fetch (with `AbortSignal.timeout(20s)`), then `PARSE_HTML`.
 - `ALL_TOOLS` — the array passed to every evaluator's `chatCompletionWithTools` call.
 
 ### `handlers.ts`
-`googleSearch` and `readPage` — fetch in the service worker, send HTML to offscreen, return `{ results: Array<{ title, url, snippet }> }` / `{ title, url, content_markdown }`. Both honor `context.signal` for caller aborts.
+`webSearch` and `readPage` — fetch in the service worker, send HTML to offscreen for the Turndown conversion, return the resulting markdown. Both honor `context.signal` for caller aborts.
 
 ---
 
 ## `html-to-markdown.ts`
 
-Shared HTML→markdown pipeline used by both `tools/handlers.ts` and the offscreen. The offscreen uses Turndown directly (window-only); the tool handlers don't parse, they just call the offscreen.
+Shared HTML→markdown pipeline used by the offscreen to service the agent tools. The offscreen uses Turndown directly (window-only); the tool handlers don't parse, they just call the offscreen.
 
 | Export | Purpose |
 |---|---|
-| `parseGoogleSearchResults(html)` | Strips `<script>`/`<style>`, trims to first `<h1>Search Results</h1>` anchor and everything after, then runs Turndown. Returns `{ markdown, trimmed: boolean }`. |
-| `parseGenericPage(html)` | Same strip, no trim, Turndown. Returns `{ markdown, trimmed: false }`. |
+| `parseHtmlToMarkdown(html)` | Strips `<script>`/`<style>`/`<noscript>`, runs Turndown on the rest. Returns `{ markdown, trimmed: false }`. Single function — no mode-specific variants; both `web_search` and `read_page` get the same treatment. |
 | `stripScriptsAndStyles(html)` | Internal helper. |
-| `trimToAnchor(html, tag, text)` | Internal helper. |
 
 ---
 

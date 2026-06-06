@@ -4,15 +4,26 @@ All evaluators live in `src/evaluators/`. They run in parallel via `runner.ts` a
 
 ## Runner (`runner.ts`)
 
-`runAllEvaluators(job, profile, config, customPrompt, onProgress)` orchestrates execution:
+`runAllEvaluators(job, profile, config, customPrompt, onProgress, onToolCall?)` orchestrates execution:
 
 - Wraps each evaluator in `runWithTracking<T>()` for error isolation and progress reporting
 - Runs all 5 via `Promise.all` — a single failure doesn't block others
 - Calls `onProgress(name, status)` after each evaluator settles
+- Calls `onToolCall(evaluatorName, ToolCall)` whenever an evaluator's agent loop
+  is about to dispatch a tool — the background service worker re-broadcasts
+  these as `ANALYSIS_PROGRESS` messages with `kind: 'tool'` so the sidepanel
+  can show live per-evaluator activity ("Searching: …", "Reading: …")
+- Each evaluator's `onToolCall` is the same callback tagged with its own name
+  (a thin `forEvaluator(name)` wrapper) — the agent loop fires the callback
+  before the tool actually runs, so the UI can show "in flight" state.
 
 ## Aggregator (`aggregator.ts`)
 
-`aggregate(job, evaluators)` combines results into `AggregatedReport`.
+`aggregate(job, evaluators)` combines results into `AggregatedReport`. It also
+walks every evaluator's `evidences` array and produces a deduplicated
+`report.references` list — one entry per unique URL, with `cited_by` listing
+the evaluators that referenced it. URLs are normalized (lowercased, query and
+fragment stripped) before dedup.
 
 ### Scoring Weights
 
@@ -41,6 +52,23 @@ Salary alignment maps: `above → 0.9`, `within → 0.7`, `below → 0.35`.
 
 ## Individual Evaluators
 
+All 5 research-style evaluators share an `evidences: EvidenceItem[]` field on
+their output:
+
+```ts
+interface EvidenceItem {
+  title: string
+  url: string
+  snippet?: string
+}
+```
+
+The model's prompt instructs it to populate `evidences` with the pages it
+actually read (or search results it clicked through and read), one per source.
+The aggregator deduplicates by normalized URL across evaluators and tags each
+entry with the evaluators that cited it — surfacing in the report as a
+"References" list with clickable links.
+
 ### Job Fit (`job-fit.ts`)
 
 **Role:** Technical recruiter assessing skill and experience alignment.
@@ -57,6 +85,99 @@ Salary alignment maps: `above → 0.9`, `within → 0.7`, `below → 0.35`.
   gaps: string[]
   strengths: string[]
   summary: string
+  evidences: EvidenceItem[]
+}
+```
+
+---
+
+### Salary (`salary.ts`)
+
+**Role:** Compensation analyst with currency/COL adjustment awareness.
+
+**Inputs:** Job description, `salary_expectation`, `years_of_experience`
+
+**Output:**
+```ts
+{
+  estimated_range: { min: number; max: number; currency: string }
+  expectation_alignment: "above" | "within" | "below"
+  // "above" = job pays MORE than expected (good for candidate)
+  // "below" = job pays LESS than expected (bad)
+  risk_flag: boolean
+  reasoning: string
+  evidences: EvidenceItem[]
+}
+```
+
+---
+
+### Preference (`preference.ts`)
+
+**Role:** Career advisor matching job to user lifestyle preferences.
+
+**Inputs:** Job description, `JobPreferences` (remote, locations, company size, industries, deal breakers)
+
+**Output:**
+```ts
+{
+  alignment_score: number   // 0–1
+  conflicts: Array<{
+    category: string
+    expected: string
+    actual: string
+    severity: "low" | "medium" | "high"
+  }>
+  matches: string[]
+  summary: string
+  evidences: EvidenceItem[]
+}
+```
+
+---
+
+### Risk (`risk.ts`)
+
+**Role:** Job posting red flag detector.
+
+**Detects:** under-leveling, overqualification, vague JD, toxic culture signals, unrealistic requirements, high turnover indicators
+
+**Output:**
+```ts
+{
+  overall_risk: "low" | "medium" | "high"
+  flags: Array<{
+    type: string
+    description: string
+    severity: "low" | "medium" | "high"
+  }>
+  summary: string
+  evidences: EvidenceItem[]
+}
+```
+
+The Risk evaluator's prompt explicitly names the tools (web_search,
+read_page) and instructs it to use them when the JD lacks information — the
+primary user case is "look up an unknown company" (stealth mode, founding
+team, etc.). `evidences` lets the user verify what the analyst actually read.
+
+---
+
+### Growth (`growth.ts`)
+
+**Role:** Career strategist evaluating long-term value of the role.
+
+**Output:**
+```ts
+{
+  learning: number           // 0–1
+  brand_value: number        // 0–1
+  career_trajectory: number  // 0–1
+  overall_growth: number     // 0–1
+  highlights: string[]
+  concerns: string[]
+  summary: string
+  evidences: EvidenceItem[]
 }
 ```
 
@@ -161,6 +282,8 @@ Not part of the analysis pipeline — triggered separately.
 }
 ```
 
+The model returns the resume as raw Markdown followed by a `---SUMMARY---` delimiter and the changelog (not JSON — avoids escaping a long Markdown doc inside a JSON string); `splitResumeOutput` splits on the delimiter, and a single retry fires if the delimiter or resume is missing.
+
 Supports iterative refinement: each regeneration receives the previous version and cumulative changelog, so improvements accumulate without losing history.
 
 ---
@@ -201,7 +324,7 @@ Defined in `src/lib/tools/definitions.ts`:
 
 | Tool | Args | Behavior |
 |---|---|---|
-| `google_search` | `query: string` | `fetch` Google, strip `<script>`/`<style>`, trim to first `<h1>Search Results</h1>`, convert remainder to markdown |
+| `web_search` | `query: string` | `fetch` DuckDuckGo HTML endpoint, strip `<script>`/`<style>`, convert to markdown |
 | `read_page` | `url: string` | `fetch` any HTTP(S) URL, strip `<script>`/`<style>`, convert to markdown |
 
 ### Tool execution pipeline
@@ -209,9 +332,9 @@ Defined in `src/lib/tools/definitions.ts`:
 ```
 agent loop (service worker or sidepanel)
   └─ executeTool(call, signal)
-       └─ googleSearch / readPage  (lib/tools/handlers.ts)
+       └─ webSearch / readPage  (lib/tools/handlers.ts)
             ├─ fetch(url)             ← service worker does the fetch
-            └─ chrome.runtime.sendMessage({ type: 'PARSE_HTML', html, trimToAnchor? })
+            └─ chrome.runtime.sendMessage({ type: 'PARSE_HTML', html })
                  │
                  ▼
             offscreen document  (src/entrypoints/offscreen/)
@@ -227,3 +350,18 @@ The service worker's `onMessage` listener returns `false` for `PARSE_HTML` messa
 `runAgentWithValidation<T>()` (`src/lib/agent.ts`) is the agent-aware replacement for `runWithValidation`. It runs the agent loop, parses the final content as JSON, validates, and retries once on parse/validation failure — same semantics as `runWithValidation`, but tools are available.
 
 All 5 evaluators + the summary evaluator use it. The Risk evaluator's prompt explicitly mentions the available tools, since looking up unknown companies is its primary use case. Other evaluators can opt in by adding a similar note.
+
+### Live activity feed
+
+The agent loop exposes an `onToolCall(call)` hook on `AgentOptions`. Each
+evaluator forwards this to the runner, which tags every call with the
+evaluator's name and re-emits a 2-arg `(name, call)` callback. The background
+service worker turns those into `ANALYSIS_PROGRESS` messages with
+`kind: 'tool'` (alongside the existing `kind: 'status'` transitions), so the
+sidepanel can show a per-evaluator "Searching: …" / "Reading: …" badge that
+streams in real time.
+
+The wire format keeps a per-evaluator monotonic `seq` so the UI can dedupe /
+supersede in-flight activity (the latest "Searching X" replaces the previous
+one for that evaluator's display row). On `completed` / `error`, the
+sidepanel clears the activity for that evaluator.

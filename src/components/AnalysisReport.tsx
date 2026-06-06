@@ -1,24 +1,28 @@
 import {
   AlertTriangle,
   Banknote,
+  BookOpen,
+  ExternalLink,
   Heart,
   Lightbulb,
+  Sparkles,
   Target,
   TrendingUp,
 } from 'lucide-react'
 import { marked } from 'marked'
 import { useMemo } from 'react'
 
-import type { AggregatedReport } from '@/types/evaluation'
+import type { AggregatedReport, EvidenceItem, EvaluatorStatus } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
 import type { UserProfile } from '@/types/profile'
-import type { EvaluatorProgress } from '@/hooks/useTabSessions'
+import type { EvaluatorProgress, EvaluatorActivity, PartialEvaluatorResults } from '@/hooks/useTabSessions'
 import { formatAnalysisContext } from '@/lib/analysis-context'
 import { jobToMarkdown } from '@/extractor/markdown'
 import { EvaluatorCard } from './EvaluatorCard'
 import { ReportChat } from './ReportChat'
 import { ScoreBar } from './ScoreBar'
+import { StatusPill } from './StatusPill'
 import { VerdictBadge } from './VerdictBadge'
 
 interface AnalysisReportProps {
@@ -32,49 +36,61 @@ interface AnalysisReportProps {
   useChromeBackend?: boolean
   profile?: UserProfile
   customPrompt?: string
+  activity?: EvaluatorActivity
+  // Per-evaluator results streamed in as each finishes. Falls back to
+  // report.evaluators so the body of each card renders the moment that
+  // evaluator lands — no more empty dropdown while waiting for the
+  // aggregator to bundle all 5 +summary.
+  evaluatorResults?: PartialEvaluatorResults
   onAppendChat?: (turns: ChatTurn[], targetTabId: number, nonce?: number) => void
   onSetChatLoading?: (tabId: number, loading: boolean, nonce?: number) => void
   onBumpChatNonce?: (tabId: number) => number
   onDeleteChatTurn?: (index: number) => void
 }
 
-export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, chatLoading, currentTabId, useChromeBackend, profile, customPrompt, onAppendChat, onSetChatLoading, onBumpChatNonce, onDeleteChatTurn }: AnalysisReportProps) {
+export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, chatLoading, currentTabId, useChromeBackend, profile, customPrompt, activity, evaluatorResults, onAppendChat, onSetChatLoading, onBumpChatNonce, onDeleteChatTurn }: AnalysisReportProps) {
   const jobMarkdown = useMemo(() => (job ? jobToMarkdown(job) : ''), [job])
   const analysisContext = useMemo(() => (report ? formatAnalysisContext(report) : ''), [report])
 
+  // No analysis run yet, or done with no report — nothing to render.
   if (!report && !analyzing) return null
-  if (!report && analyzing) {
-    return (
-      <div className="border rounded-lg p-3 space-y-2 animate-pulse">
-        <div className="h-5 w-24 rounded bg-muted" />
-        <div className="space-y-1.5">
-          <div className="h-3 rounded bg-muted" />
-          <div className="h-3 w-4/5 rounded bg-muted" />
-        </div>
-      </div>
-    )
+
+  // Resolve the result for a given evaluator slot. Prefers the streamed
+  // partial (so the body shows up the moment that evaluator finishes, not
+  // after the aggregator bundles everything) and falls back to the
+  // aggregated report. Returns undefined if neither source has it.
+  const resultFor = <K extends keyof PartialEvaluatorResults>(slot: K): PartialEvaluatorResults[K] | undefined => {
+    return evaluatorResults?.[slot] ?? report?.evaluators[slot as 'job_fit' | 'salary' | 'preference' | 'risk' | 'growth']?.result as PartialEvaluatorResults[K] | undefined
+  }
+
+  // Are we still waiting for this evaluator's content? The card is
+  // non-expandable while waiting — opening it would show an empty body.
+  // "Waiting" means: progress says completed (so the card is otherwise
+  // ready to expand) but neither the streamed partial nor the aggregated
+  // report has a result yet. That gap is normally tiny (status and result
+  // messages are sent back-to-back) but it can be visible if messages
+  // arrive out of order or during the first-frame race.
+  const waitingFor = (status: EvaluatorStatus<unknown>, partial: unknown) =>
+    !report?.evaluators
+      ? !partial
+      : status.status !== 'fulfilled' || (!status.result && !partial)
+
+  // Failure reason for an evaluator slot, if it rejected. Lives on the
+  // aggregated report's EvaluatorStatus.error (set by runner.runWithTracking).
+  const errorFor = (slot: 'job_fit' | 'salary' | 'preference' | 'risk' | 'growth'): string | undefined => {
+    const s = report?.evaluators[slot]
+    return s?.status === 'rejected' ? s.error : undefined
   }
 
   return (
     <div className="space-y-3">
-      {/* Verdict */}
-      {report ? (
-        <div className="border rounded-lg p-3 space-y-2">
-          <VerdictBadge verdict={report.verdict} score={report.overall_score} />
-          {report.job_summary && (
-            <p className="text-xs leading-relaxed">{report.job_summary}</p>
-          )}
-          <p className="text-xs text-muted-foreground leading-relaxed">{report.reasoning}</p>
-        </div>
-      ) : (
-        <div className="border rounded-lg p-3 space-y-2 animate-pulse">
-          <div className="h-5 w-24 rounded bg-muted" />
-          <div className="space-y-1.5">
-            <div className="h-3 rounded bg-muted" />
-            <div className="h-3 w-4/5 rounded bg-muted" />
-          </div>
-        </div>
-      )}
+      {/* Summary (synthesizes verdict + job_summary + reasoning once all
+          5 evaluators are done). Has its own status pill — runs last. */}
+      <SummaryCard
+        status={progress.summary}
+        report={report}
+        summary={resultFor('summary')}
+      />
 
       {/* Evaluator Cards */}
       <div className="space-y-2">
@@ -82,10 +98,12 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           title="Job Fit"
           icon={<Target className="size-3.5" />}
           status={progress.job_fit}
-          error={report?.evaluators.job_fit.error}
+          activity={activity?.job_fit}
+          error={errorFor('job_fit')}
+          waitingForContent={waitingFor(report?.evaluators.job_fit as EvaluatorStatus<unknown>, evaluatorResults?.job_fit)}
         >
-          {report?.evaluators.job_fit.result && (
-            <JobFitDetail result={report.evaluators.job_fit.result} />
+          {resultFor('job_fit') && (
+            <JobFitDetail result={resultFor('job_fit')!} />
           )}
         </EvaluatorCard>
 
@@ -93,10 +111,12 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           title="Salary"
           icon={<Banknote className="size-3.5" />}
           status={progress.salary}
-          error={report?.evaluators.salary.error}
+          activity={activity?.salary}
+          error={errorFor('salary')}
+          waitingForContent={waitingFor(report?.evaluators.salary as EvaluatorStatus<unknown>, evaluatorResults?.salary)}
         >
-          {report?.evaluators.salary.result && (
-            <SalaryDetail result={report.evaluators.salary.result} />
+          {resultFor('salary') && (
+            <SalaryDetail result={resultFor('salary')!} />
           )}
         </EvaluatorCard>
 
@@ -104,10 +124,12 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           title="Preferences"
           icon={<Heart className="size-3.5" />}
           status={progress.preference}
-          error={report?.evaluators.preference.error}
+          activity={activity?.preference}
+          error={errorFor('preference')}
+          waitingForContent={waitingFor(report?.evaluators.preference as EvaluatorStatus<unknown>, evaluatorResults?.preference)}
         >
-          {report?.evaluators.preference.result && (
-            <PreferenceDetail result={report.evaluators.preference.result} />
+          {resultFor('preference') && (
+            <PreferenceDetail result={resultFor('preference')!} />
           )}
         </EvaluatorCard>
 
@@ -115,10 +137,12 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           title="Risk"
           icon={<AlertTriangle className="size-3.5" />}
           status={progress.risk}
-          error={report?.evaluators.risk.error}
+          activity={activity?.risk}
+          error={errorFor('risk')}
+          waitingForContent={waitingFor(report?.evaluators.risk as EvaluatorStatus<unknown>, evaluatorResults?.risk)}
         >
-          {report?.evaluators.risk.result && (
-            <RiskDetail result={report.evaluators.risk.result} />
+          {resultFor('risk') && (
+            <RiskDetail result={resultFor('risk')!} />
           )}
         </EvaluatorCard>
 
@@ -126,10 +150,12 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           title="Growth"
           icon={<TrendingUp className="size-3.5" />}
           status={progress.growth}
-          error={report?.evaluators.growth.error}
+          activity={activity?.growth}
+          error={errorFor('growth')}
+          waitingForContent={waitingFor(report?.evaluators.growth as EvaluatorStatus<unknown>, evaluatorResults?.growth)}
         >
-          {report?.evaluators.growth.result && (
-            <GrowthDetail result={report.evaluators.growth.result} />
+          {resultFor('growth') && (
+            <GrowthDetail result={resultFor('growth')!} />
           )}
         </EvaluatorCard>
       </div>
@@ -170,6 +196,11 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
         </div>
       )}
 
+      {/* References (deduplicated across all evaluators) */}
+      {report && (report.references?.length ?? 0) > 0 && (
+        <ReferencesSection references={report.references} />
+      )}
+
       {/* Chat */}
       {report && job && qnaHistory !== undefined && chatLoading !== undefined && currentTabId !== undefined && onAppendChat && onSetChatLoading && onBumpChatNonce && onDeleteChatTurn && (
         <ReportChat
@@ -191,6 +222,58 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
   )
 }
 
+// --- Summary card ---
+
+// Verdict + job_summary + reasoning. Has its own status pill driven by
+// `progress.summary` so the user sees "Synthesizing..." while the summary
+// evaluator is running (it goes last, after all 5 research evaluators).
+// Body renders as soon as EITHER the streamed summary partial lands or the
+// full aggregated report is available. The streamed partial doesn't have
+// verdict/overall_score (those are computed by the aggregator), so when
+// only the partial is in we render the text but skip the verdict badge.
+function SummaryCard({
+  status,
+  report,
+  summary,
+}: {
+  status: 'pending' | 'running' | 'completed' | 'error'
+  report: AggregatedReport | null
+  summary?: { job_summary: string; reasoning: string }
+}) {
+  return (
+    <div className="border rounded-lg">
+      <div className="w-full flex items-center px-3 py-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <Sparkles className="size-3.5 text-muted-foreground" />
+          <span className="text-xs font-medium">Summary</span>
+          <StatusPill
+            status={status}
+            customLabel={{ running: 'Synthesizing…', queued: 'Waiting…', done: 'Done', failed: 'Failed' }}
+          />
+        </div>
+      </div>
+      {report && (
+        <div className="px-3 pb-3 pt-1 border-t space-y-2">
+          <VerdictBadge verdict={report.verdict} score={report.overall_score} />
+          {report.job_summary && (
+            <p className="text-xs leading-relaxed">{report.job_summary}</p>
+          )}
+          <p className="text-xs text-muted-foreground leading-relaxed">{report.reasoning}</p>
+        </div>
+      )}
+      {!report && summary && (
+        <div className="px-3 pb-3 pt-1 border-t space-y-2">
+          {summary.job_summary && (
+            <p className="text-xs leading-relaxed">{summary.job_summary}</p>
+          )}
+          <p className="text-xs text-muted-foreground leading-relaxed">{summary.reasoning}</p>
+          <p className="text-[10px] text-muted-foreground/70">Final verdict will appear once all evaluators complete…</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // --- Sub-components for each evaluator ---
 
 // Safely coerce any value to a renderable string
@@ -203,6 +286,40 @@ function str(v: unknown): string {
 
 function arr<T>(v: T[] | null | undefined): T[] {
   return Array.isArray(v) ? v : []
+}
+
+function ReferencesSection({ references }: { references: EvidenceItem[] }) {
+  return (
+    <div className="border rounded-lg p-3 space-y-1.5">
+      <h4 className="text-xs font-semibold flex items-center gap-1.5">
+        <BookOpen className="size-3 text-blue-500" />
+        References ({references.length})
+      </h4>
+      <ul className="space-y-1.5">
+        {references.map((ref, i) => (
+          <li key={i} className="text-xs space-y-0.5">
+            <a
+              href={ref.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 break-all"
+            >
+              {ref.title || ref.url}
+              <ExternalLink className="size-2.5 shrink-0" />
+            </a>
+            {ref.snippet && (
+              <p className="text-muted-foreground line-clamp-2">{ref.snippet}</p>
+            )}
+            {ref.cited_by && ref.cited_by.length > 0 && (
+              <p className="text-[10px] text-muted-foreground/70">
+                cited by {ref.cited_by.join(', ').replace(/_/g, ' ')}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }
 
 function JobFitDetail({ result }: { result: import('@/types/evaluation').JobFitResult }) {
@@ -301,7 +418,7 @@ function RiskDetail({ result }: { result: import('@/types/evaluation').RiskResul
     medium: 'text-yellow-600 dark:text-yellow-400',
     high: 'text-red-600 dark:text-red-400',
   }
-  const flags = arr(result.flags)
+  const flags = arr(result.flags).filter((f) => str(f.description).trim().length > 0)
 
   return (
     <div className="space-y-1.5 pt-1">

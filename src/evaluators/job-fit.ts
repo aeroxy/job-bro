@@ -1,9 +1,17 @@
 import { validateNumbers, buildResumeContext } from '@/lib/llm-client'
-import type { ChatMessage } from '@/lib/llm-client'
+import type { ChatMessage, JsonSchemaSpec } from '@/lib/llm-client'
 import { runAgentWithValidation, executeTool } from '@/lib/agent'
-import { ALL_TOOLS } from '@/lib/tools/definitions'
+import type { ToolDefinition } from '@/lib/tools/types'
 import type { JobFitResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
+import type { ToolCall } from '@/lib/tools/types'
+import { JOB_FIT_SCHEMA } from './schemas'
+
+export const JOB_FIT_SCHEMA_NAME = 'job_fit_result'
+export const JOB_FIT_JSON_SCHEMA: JsonSchemaSpec = {
+  name: JOB_FIT_SCHEMA_NAME,
+  schema: JOB_FIT_SCHEMA as unknown as Record<string, unknown>,
+}
 
 const PROMPT = `You are a technical recruiter evaluating job fit.
 
@@ -19,20 +27,25 @@ Critical scoring rules:
 - "matching_skills" must be ACTUAL technical overlaps, not generic traits like "leadership" or "communication".
 - "gaps" MUST explicitly enumerate any domain-level gaps (e.g., "No hardware/sensor engineering experience", "No embedded firmware background"). Surface these even when other signals are strong.
 
-Focus strictly on skills, experience, and role scope. Do not comment on salary, compensation, or location — those are evaluated separately.`
+Focus strictly on skills, experience, and role scope. Do not comment on salary, compensation, or location — those are evaluated separately.
+
+Evidences: if you used web_search or read_page to inform your answer, list the sources you actually relied on in an "evidences" array of {"title":"","url":"","snippet":""}. Each entry must be a page you read (or a search result you clicked through and read); do not include searches you didn't act on. If you didn't use any tools, emit "evidences": [].`
 
 export async function runJobFitEvaluator(
   jobContent: string,
   profile: UserProfile,
   config: LLMConfig,
   customPrompt: string,
-  signal?: AbortSignal
+  tools: ToolDefinition[],
+  onToolCall?: (call: ToolCall) => void,
+  signal?: AbortSignal,
+  jsonSchema?: JsonSchemaSpec
 ): Promise<JobFitResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
   messages.push({ role: 'system', content: buildResumeContext(profile) })
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
-{"skill_match":0.0,"experience_match":0.0,"overall_fit":0.0,"matching_skills":[],"gaps":[],"strengths":[],"summary":""}` })
+{"skill_match":0.0,"experience_match":0.0,"overall_fit":0.0,"matching_skills":[],"gaps":[],"strengths":[],"summary":"","evidences":[]}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
   messages.push({ role: 'user', content: PROMPT })
 
@@ -40,14 +53,20 @@ export async function runJobFitEvaluator(
     config,
     messages,
     {
-      tools: ALL_TOOLS,
+      tools,
       executeTool,
-      validate: (r) =>
-        validateNumbers(r, ['skill_match', 'experience_match', 'overall_fit']) ??
-        (Array.isArray(r.gaps) && Array.isArray(r.strengths) && Array.isArray(r.matching_skills)
-          ? null
-          : '"gaps", "strengths", "matching_skills" must be arrays'),
+      validate: (r) => {
+        const base = validateNumbers(r, ['skill_match', 'experience_match', 'overall_fit']) ??
+          (Array.isArray(r.gaps) && Array.isArray(r.strengths) && Array.isArray(r.matching_skills)
+            ? null
+            : '"gaps", "strengths", "matching_skills" must be arrays')
+        if (base) return base
+        if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
+        return null
+      },
       signal,
+      onToolCall,
+      jsonSchema,
     }
   )
 }
