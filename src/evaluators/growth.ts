@@ -76,11 +76,14 @@ export async function runGrowthEvaluator(
   // Preferences give the model the candidate's stated targets (industries of
   // interest, deal breakers, etc.) — essential for candidate-relative scoring.
   messages.push({ role: 'system', content: buildPreferencesContext(profile) })
+  // Upstream conclusions and prior web research derive from untrusted content
+  // (the JD and fetched pages), so they go in as 'user' — never 'system' —
+  // to avoid elevating attacker-controllable text to instruction priority.
   const upstreamContext = buildGrowthUpstreamContext(jobFit)
-  if (upstreamContext) messages.push({ role: 'system', content: upstreamContext })
+  if (upstreamContext) messages.push({ role: 'user', content: upstreamContext })
   if (priorResearch) {
     const research = buildPriorResearchContext(priorResearch)
-    if (research) messages.push({ role: 'system', content: research })
+    if (research) messages.push({ role: 'user', content: research })
   }
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
 {"learning_opportunity":0.0,"brand_value":0.0,"career_trajectory":0.0,"overall_growth":0.0,"highlights":[],"concerns":[],"summary":"","evidences":[]}` })

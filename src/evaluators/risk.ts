@@ -96,11 +96,14 @@ export async function runRiskEvaluator(
     if (salaryExp) parts.push(`<salary_expectation>${salaryExp}</salary_expectation>`)
     messages.push({ role: 'system', content: `<candidate_experience>\n${parts.join('\n')}\n</candidate_experience>` })
   }
+  // Upstream conclusions and prior web research derive from untrusted content
+  // (the JD and fetched pages), so they go in as 'user' — never 'system' —
+  // to avoid elevating attacker-controllable text to instruction priority.
   const upstreamContext = buildRiskUpstreamContext(upstream)
-  if (upstreamContext) messages.push({ role: 'system', content: upstreamContext })
+  if (upstreamContext) messages.push({ role: 'user', content: upstreamContext })
   if (priorResearch) {
     const research = buildPriorResearchContext(priorResearch)
-    if (research) messages.push({ role: 'system', content: research })
+    if (research) messages.push({ role: 'user', content: research })
   }
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
 {"overall_risk":"low","flags":[{"type":"other","description":"","severity":"low"}],"summary":"","evidences":[]}` })

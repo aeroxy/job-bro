@@ -27,7 +27,8 @@ function collectReferences(evaluators: EvaluatorResults): EvidenceItem[] {
   for (const [name, status] of Object.entries(evaluators) as [string, EvaluatorStatus<{ evidences?: EvidenceItem[] }>][]) {
     if (status.status !== 'fulfilled' || !status.result) continue
     for (const ev of status.result.evidences ?? []) {
-      if (!ev?.url) continue
+      // url comes from untrusted LLM output — may be missing or non-string.
+      if (typeof ev?.url !== 'string') continue
       const key = ev.url.split('#')[0]!.split('?')[0]!.toLowerCase()
       const existing = byUrl.get(key)
       if (existing) {

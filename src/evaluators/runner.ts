@@ -44,7 +44,8 @@ function poolEvidence(...results: Array<{ evidences?: EvidenceItem[] } | undefin
   const byUrl = new Map<string, EvidenceItem>()
   for (const r of results) {
     for (const ev of r?.evidences ?? []) {
-      if (!ev?.url) continue
+      // url comes from untrusted LLM output — may be missing or non-string.
+      if (typeof ev?.url !== 'string') continue
       const key = ev.url.split('#')[0]!.split('?')[0]!.toLowerCase()
       if (!byUrl.has(key)) byUrl.set(key, ev)
     }

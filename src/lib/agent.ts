@@ -39,6 +39,9 @@ export const executeTool: ToolExecutor = async (call, signal) => {
   let args: Record<string, unknown>
   try {
     args = JSON.parse(call.function.arguments)
+    // JSON.parse succeeds on `"null"`, `"42"`, etc.; guard so the property
+    // access below can't throw a TypeError on a non-object.
+    if (!args || typeof args !== 'object') throw new Error('not an object')
   } catch {
     throw new Error(`Tool ${call.function.name} received malformed arguments`)
   }

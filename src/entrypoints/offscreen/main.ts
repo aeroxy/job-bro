@@ -216,9 +216,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'PARSE_HTML') {
     const req = message as ParseRequest
     try {
-      Promise.resolve(parseHtmlToMarkdown(req.html))
-        .then((r) => sendResponse(r))
-        .catch((e) => sendResponse({ markdown: `__PARSE_ERROR__:${(e as Error).message}`, trimmed: false }))
+      sendResponse(parseHtmlToMarkdown(req.html))
     } catch (e) {
       sendResponse({ markdown: `__PARSE_ERROR__:${(e as Error).message}`, trimmed: false })
     }

@@ -608,6 +608,13 @@ export function useTabSessions(
         // Skip if no session exists — don't spawn a default one for a stale
         // progress message. updateSessionAndRender would auto-create otherwise.
         if (!session) return
+        // Only fold messages in while this session is actively analyzing. A
+        // background run orphaned by a panel close keeps broadcasting after the
+        // panel reopens on the interrupt screen (status 'error'); without this
+        // its stale 'error'/'completed' pills would paint over the reset state.
+        // analyze() sets 'analyzing' synchronously before dispatch, so the
+        // fresh run's messages still pass.
+        if (session.status !== 'analyzing') return
         const kind = message.payload.kind ?? 'status'
         if (kind === 'tool' && message.payload.tool) {
           const t = message.payload.tool
@@ -698,6 +705,10 @@ export function useTabSessions(
       // callback (e.g. fired after reset). updateSessionAndRender would
       // auto-create otherwise.
       if (!session) return
+      // Drop callbacks from a superseded/aborted run — matches onToolCall and
+      // onResult below. Without this, a previous run aborting mid-flight fires
+      // onProgress('error') into the new run's freshly reset session.
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return
       if (!isEvaluatorSlot(evaluator)) return
       // Clear any in-flight tool activity for this evaluator once it finishes,
       // matching the remote path's status handler.

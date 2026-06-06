@@ -277,7 +277,11 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
   // call web_search / read_page.
   await ensureOffscreen()
 
+  // Guard every late callback: once this run's signal is aborted (the user
+  // stopped it, or a newer analysis superseded it), suppress its messages so a
+  // cancelled run can't overwrite the new run's state for this tab.
   const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
+    if (signal.aborted) return
     chrome.runtime.sendMessage({
       type: 'ANALYSIS_PROGRESS',
       payload: { tabId, evaluator, kind: 'status', status },
@@ -289,6 +293,7 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
   // for the same evaluator's display row).
   const toolSeqRef = { current: new Map<string, number>() }
   const onToolCall: ToolCallCallback = (evaluator, call) => {
+    if (signal.aborted) return
     const seq = (toolSeqRef.current.get(evaluator) ?? 0) + 1
     toolSeqRef.current.set(evaluator, seq)
     let args: Record<string, string> = {}
@@ -312,6 +317,7 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
   // render that card's body immediately, not after the aggregator has
   // bundled all of them. See AnalysisProgressMessage `kind: 'result'`.
   const onEvaluatorResult: EvaluatorResultCallback = (evaluator, result) => {
+    if (signal.aborted) return
     chrome.runtime.sendMessage({
       type: 'ANALYSIS_PROGRESS',
       payload: { tabId, evaluator, kind: 'result', result },
