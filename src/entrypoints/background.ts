@@ -18,22 +18,42 @@ let offscreenReady: Promise<void> | null = null
 async function ensureOffscreen(): Promise<void> {
   if (offscreenReady) return offscreenReady
   offscreenReady = (async () => {
+    if (await hasOffscreenDocument()) return
     try {
-      // @ts-expect-error — hasDocument() exists at runtime but isn't in the typings
-      if (await chrome.offscreen.hasDocument?.(OFFSCREEN_URL)) return
-    } catch {
-      /* hasDocument not available — fall through to createDocument */
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_URL,
+        reasons: OFFSCREEN_REASONS,
+        justification: 'Parse fetched HTML into markdown for the agent tools.',
+      })
+    } catch (e) {
+      // TOCTOU: another caller (or a still-resolving createDocument) may have
+      // created the document between our check and this call. Chrome rejects
+      // the second create with this message — which means the document we
+      // wanted already exists, so treat it as success.
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg.includes('Only a single offscreen document')) return
+      throw e
     }
-    await chrome.offscreen.createDocument({
-      url: OFFSCREEN_URL,
-      reasons: OFFSCREEN_REASONS,
-      justification: 'Parse fetched HTML into markdown for the agent tools.',
-    })
   })().catch((e) => {
     offscreenReady = null
     throw e
   })
   return offscreenReady
+}
+
+// Reliable existence check. getContexts is the supported API for this in MV3;
+// hasDocument is undocumented and racier. Falls back gracefully if unavailable.
+async function hasOffscreenDocument(): Promise<boolean> {
+  try {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+      documentUrls: [chrome.runtime.getURL(OFFSCREEN_URL)],
+    })
+    return contexts.length > 0
+  } catch {
+    // getContexts unavailable — let createDocument run; its error is handled.
+    return false
+  }
 }
 
 /**
