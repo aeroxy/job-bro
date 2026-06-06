@@ -138,21 +138,28 @@ export async function runAgent(
       tool_calls: response.tool_calls,
     } as ChatMessage)
 
-    for (const call of response.tool_calls) {
-      onToolCall?.(call)
-      let result: string
-      try {
-        result = await executeTool(call, signal)
-      } catch (e) {
-        result = `Error: ${(e as Error).message}`
-      }
-      console.log(`[Tool Call] name: ${call.function.name}, arguments: ${call.function.arguments}`, result)
-      working.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: result,
-      } as ChatMessage)
-    }
+    // Tool calls in a single turn are independent network requests — run them
+    // concurrently. .map() preserves order, so the pushed tool results still
+    // line up with response.tool_calls; the cached executor dedups any
+    // identical concurrent calls.
+    const toolResults = await Promise.all(
+      response.tool_calls.map(async (call) => {
+        onToolCall?.(call)
+        let result: string
+        try {
+          result = await executeTool(call, signal)
+        } catch (e) {
+          result = `Error: ${(e as Error).message}`
+        }
+        console.log(`[Tool Call] name: ${call.function.name}, arguments: ${call.function.arguments}`, result)
+        return {
+          role: 'tool' as const,
+          tool_call_id: call.id,
+          content: result,
+        }
+      })
+    )
+    working.push(...(toolResults as ChatMessage[]))
   }
 
   throw new Error(`Agent exceeded ${maxIterations} iterations without a final answer`)
