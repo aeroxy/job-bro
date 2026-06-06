@@ -60,7 +60,13 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
   // after the aggregator bundles everything) and falls back to the
   // aggregated report. Returns undefined if neither source has it.
   const resultFor = <K extends keyof PartialEvaluatorResults>(slot: K): PartialEvaluatorResults[K] | undefined => {
-    return evaluatorResults?.[slot] ?? report?.evaluators[slot as 'job_fit' | 'salary' | 'preference' | 'risk' | 'growth']?.result as PartialEvaluatorResults[K] | undefined
+    // 'summary' only ever comes from the streamed partials — report.evaluators
+    // has no summary slot (the aggregator computes verdict/score separately).
+    if (slot === 'summary') {
+      return evaluatorResults?.summary as PartialEvaluatorResults[K] | undefined
+    }
+    const key = slot as 'job_fit' | 'salary' | 'preference' | 'risk' | 'growth'
+    return evaluatorResults?.[slot] ?? report?.evaluators[key]?.result as PartialEvaluatorResults[K] | undefined
   }
 
   // Are we still waiting for this evaluator's content? The card is
