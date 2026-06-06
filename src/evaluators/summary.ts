@@ -1,10 +1,17 @@
 import { encode as toonEncode } from '@toon-format/toon'
-import type { ChatMessage } from '@/lib/llm-client'
+import type { ChatMessage, JsonSchemaSpec } from '@/lib/llm-client'
 import { runAgentWithValidation, executeTool } from '@/lib/agent'
-import { ALL_TOOLS } from '@/lib/tools/definitions'
+import type { ToolDefinition } from '@/lib/tools/types'
 import type { Verdict } from '@/types/evaluation'
 import type { LLMConfig } from '@/types/profile'
 import type { EvaluatorResults } from './aggregator'
+import { SUMMARY_SCHEMA } from './schemas'
+
+export const SUMMARY_SCHEMA_NAME = 'summary_result'
+export const SUMMARY_JSON_SCHEMA: JsonSchemaSpec = {
+  name: SUMMARY_SCHEMA_NAME,
+  schema: SUMMARY_SCHEMA as unknown as Record<string, unknown>,
+}
 
 const PROMPT = `<role>
 You are a career advisor synthesizing multiple evaluation analyses of a job posting for a candidate.
@@ -31,8 +38,10 @@ export async function runSummaryEvaluator(
   score: number,
   verdict: Verdict,
   config: LLMConfig,
-  customPrompt?: string,
-  signal?: AbortSignal
+  customPrompt: string | undefined,
+  tools: ToolDefinition[],
+  signal?: AbortSignal,
+  jsonSchema?: JsonSchemaSpec
 ): Promise<SummaryResult> {
   const userContent = `Score: ${score}/100 | Verdict: ${verdict}
 
@@ -49,12 +58,13 @@ ${toonEncode(evaluatorResults)}
   messages.push({ role: 'user', content: userContent })
 
   return runAgentWithValidation<SummaryResult>(config, messages, {
-    tools: ALL_TOOLS,
+    tools,
     executeTool,
     validate: (r) =>
       typeof r.job_summary === 'string' && typeof r.reasoning === 'string'
         ? null
         : '"job_summary" and "reasoning" must be strings',
     signal,
+    jsonSchema,
   })
 }

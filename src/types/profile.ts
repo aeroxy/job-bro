@@ -23,6 +23,27 @@ export interface LLMConfig {
   api_key?: string
   custom_headers?: string // JSON string of key-value pairs, e.g. '{"X-API-Key": "abc"}'
   stream_mode?: boolean
+  tools_enabled?: boolean // cloud backend only. Default true. Some local LLM
+                          // servers (small models, llama.cpp, older Ollama)
+                          // don't support the function-calling protocol and
+                          // will error or hallucinate tool calls; disable
+                          // for those. The agent loop still runs — it just
+                          // makes a single call with no tools.
+  structured_output?: boolean // cloud backend only. Default false. When true,
+                              // evaluators pass a JSON Schema via
+                              // response_format.json_schema so the model
+                              // can't drift shape and parseJSON retries drop
+                              // to near zero. Requires a provider that
+                              // supports the OpenAI json_schema response
+                              // format (OpenAI, Groq, Together, Fireworks,
+                              // vLLM, etc.). Ignored for chrome-prompt.
+  temperature?: number    // sampling temperature. Left unset by default so the
+                          // provider applies its own default (some reasoning
+                          // models reject or ignore an explicit temperature).
+  max_tokens?: number     // max completion tokens (default 8192). Reasoning
+                          // models count reasoning_content against this budget,
+                          // so a low value can be fully consumed by reasoning,
+                          // leaving empty content. Raise it for such models.
   timeout?: number        // non-stream request timeout in seconds (default 30)
   stream_timeout?: number // per-chunk inactivity timeout in seconds (default 60)
   concurrency?: number    // max concurrent calls for this provider (default 2)

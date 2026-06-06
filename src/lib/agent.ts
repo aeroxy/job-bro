@@ -8,10 +8,10 @@
 // Caps iterations to prevent runaway.
 
 import { chatCompletionWithTools, parseJSON } from './llm-client'
-import type { ChatMessage } from './llm-client'
+import type { ChatMessage, JsonSchemaSpec } from './llm-client'
 import type { LLMConfig } from '@/types/profile'
 import type { ToolCall, ToolDefinition } from './tools/types'
-import { googleSearch, readPage } from './tools/handlers'
+import { webSearch, readPage } from './tools/handlers'
 
 export const MAX_AGENT_ITERATIONS = 8
 
@@ -23,10 +23,16 @@ export interface AgentOptions {
   signal?: AbortSignal
   onToolCall?: (call: ToolCall) => void
   maxIterations?: number
+  // Optional JSON Schema for strict structured output. When set, every call
+  // in the agent loop passes response_format.json_schema so the model can't
+  // drift shape — eliminates the parseJSON/validate retry path for providers
+  // that support it (OpenAI, Groq, Together, vLLM, etc.). Ignored by Chrome
+  // backend. Evaluators thread this from config.structured_output.
+  jsonSchema?: JsonSchemaSpec
 }
 
 // Generic tool executor — works in any extension page (service worker,
-// sidepanel). Routes google_search and read_page to their handlers. The
+// sidepanel). Routes web_search and read_page to their handlers. The
 // service worker manages the offscreen document lifecycle; both contexts
 // share the same `fetch` + offscreen-message plumbing.
 export const executeTool: ToolExecutor = async (call, signal) => {
@@ -37,10 +43,10 @@ export const executeTool: ToolExecutor = async (call, signal) => {
     throw new Error(`Tool ${call.function.name} received malformed arguments`)
   }
   switch (call.function.name) {
-    case 'google_search': {
+    case 'web_search': {
       const query = String(args.query ?? '').trim()
-      if (!query) throw new Error('google_search requires a non-empty query')
-      return googleSearch(query, { signal })
+      if (!query) throw new Error('web_search requires a non-empty query')
+      return webSearch(query, { signal })
     }
     case 'read_page': {
       const url = String(args.url ?? '').trim()
@@ -57,14 +63,14 @@ export async function runAgent(
   messages: ChatMessage[],
   options: AgentOptions
 ): Promise<string> {
-  const { tools, executeTool, signal, onToolCall, maxIterations = MAX_AGENT_ITERATIONS } = options
+  const { tools, executeTool, signal, onToolCall, maxIterations = MAX_AGENT_ITERATIONS, jsonSchema } = options
   const working: ChatMessage[] = [...messages]
 
   for (let i = 0; i < maxIterations; i++) {
     if (signal?.aborted) {
       throw new DOMException('Agent aborted', 'AbortError')
     }
-    const response = await chatCompletionWithTools(config, working, { tools, signal })
+    const response = await chatCompletionWithTools(config, working, { tools, signal, jsonSchema })
 
     if (!response.tool_calls?.length) {
       return response.content

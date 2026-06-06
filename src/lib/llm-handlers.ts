@@ -13,6 +13,7 @@ import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
 import type { UserProfile } from '@/types/profile'
+import type { ToolCall } from '@/lib/tools/types'
 
 export type AnalyzeResult =
   | { ok: true; report: AggregatedReport }
@@ -27,6 +28,12 @@ export type ChatResult =
   | { ok: false; error: string }
 
 export type ProgressCallback = (evaluator: string, status: 'running' | 'completed' | 'error') => void
+export type ToolCallCallback = (evaluator: string, call: ToolCall) => void
+// Streamed per-evaluator result. Fires once after each evaluator finishes,
+// independent of the aggregator. Lets the sidepanel render each card body
+// as soon as its evaluator lands — no more "all cards empty until the
+// summary + aggregation step completes" gap.
+export type EvaluatorResultCallback = (evaluator: string, result: unknown) => void
 
 async function loadConfigAndProfile(): Promise<
   | { ok: true; profile: UserProfile; config: NonNullable<Awaited<ReturnType<typeof getLLMConfig>>>; customPrompt: string }
@@ -53,6 +60,8 @@ export async function runAnalysis(
   job: ExtractedJob,
   signal: AbortSignal,
   onProgress?: ProgressCallback,
+  onToolCall?: ToolCallCallback,
+  onEvaluatorResult?: EvaluatorResultCallback,
 ): Promise<AnalyzeResult> {
   const loaded = await loadConfigAndProfile()
   if (!loaded.ok) return loaded
@@ -64,7 +73,9 @@ export async function runAnalysis(
       loaded.config,
       loaded.customPrompt,
       onProgress,
+      onToolCall,
       signal,
+      onEvaluatorResult,
     )
     return { ok: true, report }
   } catch (e) {
@@ -90,7 +101,7 @@ export async function runResume(
       jobMarkdown,
       loaded.profile,
       loaded.config,
-      loaded.customPrompt || undefined,
+      loaded.customPrompt,
       analysisContext,
       previousResume,
       previousSummary,
@@ -176,10 +187,10 @@ export async function runChat(
   messages.push({ role: 'user', content: question })
 
   try {
+    // No max_tokens/temperature override — let the client resolve them from
+    // config (max_tokens default 8192; temperature unset unless configured).
     const answer = await chatCompletion(loaded.config, messages, {
       json_mode: false,
-      max_tokens: 1500,
-      temperature: 0.4,
     })
     return { ok: true, answer }
   } catch (e) {

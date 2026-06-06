@@ -349,24 +349,97 @@ export function SettingsForm({
                     Max parallel calls to this provider
                   </p>
                 </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Max Tokens</Label>
+                  <Input
+                    type="number"
+                    min={256}
+                    placeholder="8192"
+                    value={config.max_tokens ?? ''}
+                    onChange={(e) =>
+                      setConfig((p) => ({
+                        ...p,
+                        max_tokens: e.target.value ? (Number(e.target.value) || undefined) : undefined,
+                      }))
+                    }
+                    className="text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Completion budget. Raise for reasoning models
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Temperature</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    placeholder="Provider default"
+                    value={config.temperature ?? ''}
+                    onChange={(e) =>
+                      setConfig((p) => ({
+                        ...p,
+                        temperature: e.target.value !== '' ? Number(e.target.value) : undefined,
+                      }))
+                    }
+                    className="text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Leave blank to use the provider default
+                  </p>
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {!isChrome && (
-          <div className="flex items-center justify-between border-t pt-3">
-            <div>
-              <Label className="text-xs">Stream Mode</Label>
-              <p className="text-[10px] text-muted-foreground">
-                Use SSE streaming for LLM calls. Enable if you experience gateway timeouts on large requests.
-              </p>
+          <>
+            <div className="flex items-center justify-between border-t pt-3">
+              <div>
+                <Label className="text-xs">Allow Tool Calls</Label>
+                <p className="text-[10px] text-muted-foreground">
+                  Let the model use web_search and read_page to look up companies, market data, etc.
+                  Disable for local LLM servers that don&rsquo;t support function-calling — small models
+                  (llama.cpp, older Ollama builds) often ignore the protocol or hallucinate tool calls.
+                  When off, the agent loop runs a single call without tools.
+                </p>
+              </div>
+              <Switch
+                checked={config.tools_enabled !== false}
+                onCheckedChange={(checked) => setConfig((p) => ({ ...p, tools_enabled: checked }))}
+              />
             </div>
-            <Switch
-              checked={config.stream_mode ?? false}
-              onCheckedChange={(checked) => setConfig((p) => ({ ...p, stream_mode: checked }))}
-            />
-          </div>
+            <div className="flex items-center justify-between border-t pt-3">
+              <div>
+                <Label className="text-xs">Use Structured Output</Label>
+                <p className="text-[10px] text-muted-foreground">
+                  Send each evaluator a strict JSON Schema via{' '}
+                  <code className="text-[10px]">response_format.json_schema</code> so the model can&rsquo;t
+                  drift shape. Eliminates the &ldquo;fix your JSON&rdquo; retry path. Requires a provider
+                  that supports the OpenAI json_schema format (OpenAI, Groq, Together, Fireworks, vLLM).
+                  Disable for local servers that silently ignore unknown response_format fields.
+                </p>
+              </div>
+              <Switch
+                checked={config.structured_output === true}
+                onCheckedChange={(checked) => setConfig((p) => ({ ...p, structured_output: checked }))}
+              />
+            </div>
+            <div className="flex items-center justify-between border-t pt-3">
+              <div>
+                <Label className="text-xs">Stream Mode</Label>
+                <p className="text-[10px] text-muted-foreground">
+                  Use SSE streaming for LLM calls. Enable if you experience gateway timeouts on large requests.
+                </p>
+              </div>
+              <Switch
+                checked={config.stream_mode ?? false}
+                onCheckedChange={(checked) => setConfig((p) => ({ ...p, stream_mode: checked }))}
+              />
+            </div>
+          </>
         )}
 
         <div className="border-t pt-3">

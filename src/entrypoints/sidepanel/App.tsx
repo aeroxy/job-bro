@@ -74,6 +74,8 @@ export default function App() {
     setResumeMarkdown,
     resetResume,
     invalidateHydration,
+    activity,
+    evaluatorResults,
   } = useTabSessions(activeTabId, onTabRemoved, llmConfig)
 
   const handleRestore = useCallback((jobId: string) => {
@@ -421,6 +423,8 @@ export default function App() {
             progress={progress}
             analyzing={status === 'analyzing'}
             job={job}
+            activity={activity}
+            evaluatorResults={evaluatorResults}
             qnaHistory={qnaHistory}
             chatLoading={chatLoading}
             currentTabId={activeTabId!}

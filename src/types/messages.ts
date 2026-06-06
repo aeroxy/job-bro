@@ -38,13 +38,31 @@ export type AnalysisResultMessage = {
   payload: AggregatedReport
 }
 
-// Background -> Sidebar: per-evaluator progress update
+// Background -> Sidebar: per-evaluator progress update. Three kinds:
+//   - 'status': high-level state transition (running / completed / error)
+//   - 'tool': a tool call the evaluator is about to dispatch (live activity feed)
+//   - 'result': the evaluator's final result has landed. Streamed in
+//     incrementally so each card's body appears as soon as that evaluator
+//     finishes — the user no longer waits for the aggregator to bundle all 5
+//     +summary into a single report. `result` is the typed result for this
+//     evaluator (JobFitResult | SalaryResult | ...); the sidepanel switches
+//     on `evaluator` to assign to the right slot.
 export type AnalysisProgressMessage = {
   type: 'ANALYSIS_PROGRESS'
   payload: {
     tabId: number
     evaluator: string
-    status: 'running' | 'completed' | 'error'
+    kind?: 'status' | 'tool' | 'result'
+    status?: 'running' | 'completed' | 'error'
+    tool?: {
+      name: 'web_search' | 'read_page'
+      args: Record<string, string>
+      // Monotonic per-evaluator counter; lets the UI replace in-flight activity
+      // (the latest "Searching X" supersedes earlier "Searching Y" within the
+      // same evaluator's display).
+      seq: number
+    }
+    result?: unknown
   }
 }
 

@@ -129,15 +129,7 @@
 
 ## Custom Prompt Prepending
 
-If the user has configured a custom system prompt:
-
-```
-buildMessages(customPrompt, internalPrompt, userContent)
-  → system: `${customPrompt}\n\n${internalPrompt}`
-  → user: userContent
-```
-
-This applies to **all 5 evaluators** and the resume generator.
+If the user has configured a custom system prompt, it will be the first system prompt for  **all llm calls**.
 
 ---
 

@@ -1,3 +1,4 @@
+import { jsonrepair } from 'jsonrepair'
 
 import { chatCompletionChrome } from './chrome-ai-client'
 import type { LLMConfig, UserProfile } from '@/types/profile'
@@ -16,6 +17,18 @@ interface ChatCompletionResponse {
     finish_reason: string
   }>
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+// Default completion-token budget. Deliberately generous: reasoning models
+// count reasoning_content against max_tokens, so a tight budget (the old
+// 2000) gets fully consumed by reasoning and the model returns empty content
+// with finish_reason 'length'. Overridable per-provider via config.max_tokens.
+const DEFAULT_MAX_TOKENS = 8192
+
+// Shared error for a length-truncated response that produced no usable output —
+// almost always a reasoning model exhausting max_tokens on reasoning_content.
+function truncatedMessage(maxTokens: number): string {
+  return `LLM response truncated at max_tokens (${maxTokens}) before producing output — reasoning models consume this budget on reasoning. Raise "Max Tokens" in settings.`
 }
 
 // Per-provider request queue to respect concurrency limits.
@@ -73,7 +86,7 @@ export async function chatCompletion(
 ): Promise<string> {
   if (config.backend === 'chrome-prompt') {
     return chatCompletionChrome(messages, {
-      temperature: options?.temperature,
+      temperature: options?.temperature ?? config.temperature,
       json_mode: options?.json_mode,
       signal: options?.signal,
     })
@@ -87,15 +100,19 @@ export async function chatCompletion(
       return streamCompletion(config, messages, options)
     }
 
-    const { temperature = 0.3, max_tokens = 2000, json_mode = true, signal } = options ?? {}
+    const { json_mode = true, signal } = options ?? {}
+    const temperature = options?.temperature ?? config.temperature
+    const max_tokens = options?.max_tokens ?? config.max_tokens ?? DEFAULT_MAX_TOKENS
     const timeoutMs = (config.timeout ?? 30) * 1000
 
     const body: Record<string, unknown> = {
       model: config.model,
       messages,
-      temperature,
       max_tokens,
     }
+    // Only send temperature when explicitly configured — otherwise let the
+    // provider apply its own default (some reasoning models reject or ignore it).
+    if (temperature !== undefined) body.temperature = temperature
 
     if (json_mode) {
       body.response_format = { type: 'json_object' }
@@ -150,8 +167,12 @@ export async function chatCompletion(
         }
 
         const data: ChatCompletionResponse = await response.json()
-        const content = data.choices?.[0]?.message?.content
-        if (!content) throw new Error('LLM returned empty response')
+        const choice = data.choices?.[0]
+        const content = choice?.message?.content
+        if (!content) {
+          if (choice?.finish_reason === 'length') throw new Error(truncatedMessage(max_tokens))
+          throw new Error('LLM returned empty response')
+        }
 
         return content
       } catch (e) {
@@ -165,25 +186,23 @@ export async function chatCompletion(
 }
 
 export function parseJSON<T>(raw: string): T {
-  let parsed: unknown
+  // Strip a markdown code fence if present, else isolate the outermost object.
+  const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/)
+  const objectMatch = raw.match(/\{[\s\S]*\}/)
+  const candidate = fenceMatch ? fenceMatch[1] : objectMatch ? objectMatch[0] : raw
 
   try {
-    parsed = JSON.parse(raw)
+    return JSON.parse(candidate) as T
   } catch {
-    const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/)
-    if (fenceMatch) {
-      parsed = JSON.parse(fenceMatch[1])
-    } else {
-      const jsonMatch = raw.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0])
-      } else {
-        throw new Error(`Failed to parse LLM response as JSON: ${raw.slice(0, 200)}`)
-      }
+    // LLMs routinely emit unescaped quotes/newlines inside strings, trailing
+    // commas, or truncated tails. jsonrepair fixes the common cases before we
+    // give up — a last resort, not the happy path.
+    try {
+      return JSON.parse(jsonrepair(candidate)) as T
+    } catch (e) {
+      throw new Error(`Failed to parse LLM response as JSON: ${(e as Error).message}: ${raw.slice(0, 200)}`)
     }
   }
-
-  return parsed as T
 }
 
 // Validate that all specified fields are finite numbers 0-1.
@@ -229,36 +248,23 @@ export async function runWithValidation<T extends object>(
   return parseJSON<T>(retryRaw)
 }
 
-// Build the messages array with custom prompt and internal prompt as separate system entries
-export function buildMessages(
-  customPrompt: string | undefined,
-  internalPrompt: string,
-  userContent: string
-): ChatMessage[] {
-  const messages: ChatMessage[] = []
-  if (customPrompt?.trim()) {
-    messages.push({ role: 'system', content: customPrompt.trim() })
-  }
-  messages.push({ role: 'system', content: internalPrompt })
-  messages.push({ role: 'user', content: userContent })
-  return messages
-}
-
 async function streamCompletion(
   config: LLMConfig,
   messages: ChatMessage[],
   options?: { temperature?: number; max_tokens?: number; json_mode?: boolean; signal?: AbortSignal }
 ): Promise<string> {
-  const { temperature = 0.3, max_tokens = 2000, json_mode = true, signal } = options ?? {}
+  const { json_mode = true, signal } = options ?? {}
+  const temperature = options?.temperature ?? config.temperature
+  const max_tokens = options?.max_tokens ?? config.max_tokens ?? DEFAULT_MAX_TOKENS
   const inactivityMs = (config.stream_timeout ?? 60) * 1000
 
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
-    temperature,
     max_tokens,
     stream: true,
   }
+  if (temperature !== undefined) body.temperature = temperature
 
   if (json_mode) {
     body.response_format = { type: 'json_object' }
@@ -323,7 +329,16 @@ async function streamCompletion(
       const decoder = new TextDecoder()
       let buffer = ''
       let content = ''
+      let finishReason: string | undefined
       let done = false
+
+      const consume = (data: string) => {
+        const parsed = JSON.parse(data)
+        const delta = parsed.choices?.[0]?.delta?.content
+        if (typeof delta === 'string') content += delta
+        const fr = parsed.choices?.[0]?.finish_reason
+        if (typeof fr === 'string') finishReason = fr
+      }
 
       while (!done) {
         const { value, done: streamDone } = await reader.read()
@@ -338,11 +353,7 @@ async function streamCompletion(
           if (!line.startsWith('data: ')) continue
           const data = line.slice(6).trim()
           if (data === '[DONE]') { done = true; break }
-          try {
-            const parsed = JSON.parse(data)
-            const delta = parsed.choices?.[0]?.delta?.content
-            if (typeof delta === 'string') content += delta
-          } catch { /* malformed chunk, skip */ }
+          try { consume(data) } catch { /* malformed chunk, skip */ }
         }
       }
 
@@ -352,15 +363,14 @@ async function streamCompletion(
         if (!line.startsWith('data: ')) continue
         const data = line.slice(6).trim()
         if (data === '[DONE]') break
-        try {
-          const parsed = JSON.parse(data)
-          const delta = parsed.choices?.[0]?.delta?.content
-          if (typeof delta === 'string') content += delta
-        } catch { /* malformed chunk, skip */ }
+        try { consume(data) } catch { /* malformed chunk, skip */ }
       }
 
       clearTimeout(inactivityTimer!)
-      if (!content) throw new Error('LLM returned empty streaming response')
+      if (!content) {
+        if (finishReason === 'length') throw new Error(truncatedMessage(max_tokens))
+        throw new Error('LLM returned empty streaming response')
+      }
       return content
 
     } catch (e) {
@@ -390,11 +400,12 @@ export async function chatCompletionWithTools(
     temperature?: number
     max_tokens?: number
     signal?: AbortSignal
+    jsonSchema?: JsonSchemaSpec
   }
 ): Promise<ChatCompletionWithToolsResult> {
   if (config.backend === 'chrome-prompt') {
     const content = await chatCompletionChrome(messages, {
-      temperature: options.temperature,
+      temperature: options.temperature ?? config.temperature,
       signal: options.signal,
     })
     return { content }
@@ -403,6 +414,14 @@ export async function chatCompletionWithTools(
   const queue = getQueue(config.base_url)
   const concurrency = config.concurrency ?? 2
   return queue.run(concurrency, () => toolCompletionRequest(config, messages, options))
+}
+
+// JSON Schema spec passed to providers that support OpenAI's strict
+// response_format.json_schema. `name` must match /^[a-zA-Z_][a-zA-Z0-9_-]*$/
+// per OpenAI's spec. The schema must be a JSON Schema object.
+export interface JsonSchemaSpec {
+  name: string
+  schema: Record<string, unknown>
 }
 
 async function toolCompletionRequest(
@@ -414,18 +433,37 @@ async function toolCompletionRequest(
     temperature?: number
     max_tokens?: number
     signal?: AbortSignal
+    jsonSchema?: JsonSchemaSpec
   }
 ): Promise<ChatCompletionWithToolsResult> {
-  const { tools, tool_choice = 'auto', temperature = 0.3, max_tokens = 2000, signal } = options
+  const { tools, tool_choice = 'auto', signal, jsonSchema } = options
+  const temperature = options.temperature ?? config.temperature
+  const max_tokens = options.max_tokens ?? config.max_tokens ?? DEFAULT_MAX_TOKENS
   const timeoutMs = (config.timeout ?? 30) * 1000
 
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
-    temperature,
     max_tokens,
     tools,
     tool_choice,
+  }
+  if (temperature !== undefined) body.temperature = temperature
+
+  // Strict structured output: server-side guarantees the response matches the
+  // declared shape, which removes the parse-and-retry path entirely. Only
+  // emitted when the caller explicitly passes a schema; without it, the
+  // default OpenAI json_object mode is used (set by the provider when tools
+  // are present, or handled by the inline prompt example).
+  if (jsonSchema) {
+    body.response_format = {
+      type: 'json_schema',
+      json_schema: {
+        name: jsonSchema.name,
+        schema: jsonSchema.schema,
+        strict: true,
+      },
+    }
   }
 
   const baseUrl = config.base_url.trim().replace(/\/+$/, '')
@@ -474,13 +512,21 @@ async function toolCompletionRequest(
       }
 
       const data = (await response.json()) as ChatCompletionResponse
-      const message = data.choices?.[0]?.message
+      const choice = data.choices?.[0]
+      const message = choice?.message
       if (!message) throw new Error('LLM returned empty response')
 
       const tool_calls = (message as { tool_calls?: ToolCall[] }).tool_calls
+      const hasToolCalls = Array.isArray(tool_calls) && tool_calls.length > 0
+      // Reasoning model that burned the whole budget on reasoning_content:
+      // length cutoff, no content, no tool_calls. Fail with an actionable
+      // message instead of returning '' and tripping a JSON parse error.
+      if (choice?.finish_reason === 'length' && !message.content && !hasToolCalls) {
+        throw new Error(truncatedMessage(max_tokens))
+      }
       return {
         content: message.content ?? '',
-        tool_calls: Array.isArray(tool_calls) && tool_calls.length > 0 ? tool_calls : undefined,
+        tool_calls: hasToolCalls ? tool_calls : undefined,
       }
     } catch (e) {
       clearTimeout(timer)

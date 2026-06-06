@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { AggregatedReport } from '@/types/evaluation'
+import type {
+  AggregatedReport,
+  GrowthResult,
+  JobFitResult,
+  PreferenceResult,
+  RiskResult,
+  SalaryResult,
+} from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
 import type { LLMConfig } from '@/types/profile'
@@ -17,6 +24,38 @@ export type TabView =
   | { name: 'main' }
   | { name: 'resume' }
 
+export interface ToolActivity {
+  name: 'web_search' | 'read_page'
+  // What the user is looking at right now. For web_search: the query.
+  // For read_page: the URL.
+  display: string
+  // Monotonic per-evaluator counter; older events are ignored when a newer
+  // one arrives.
+  seq: number
+}
+
+// One tool call, kept per-evaluator. We only show the latest in-flight one;
+// on evaluator completion the UI just clears the row.
+export interface EvaluatorActivity {
+  job_fit?: ToolActivity
+  salary?: ToolActivity
+  preference?: ToolActivity
+  risk?: ToolActivity
+  growth?: ToolActivity
+  summary?: ToolActivity
+}
+
+const EVALUATOR_SLOTS: ReadonlySet<keyof PartialEvaluatorResults> = new Set([
+  'job_fit', 'salary', 'preference', 'risk', 'growth', 'summary',
+])
+
+// Type-narrow the raw `evaluator` string from the message into a known slot
+// before assigning the result. Drops messages for unknown evaluator names
+// (e.g. typos or future slots that aren't wired up yet).
+function isEvaluatorSlot(name: string): name is keyof PartialEvaluatorResults {
+  return EVALUATOR_SLOTS.has(name as keyof PartialEvaluatorResults)
+}
+
 export interface EvaluatorProgress {
   job_fit: 'pending' | 'running' | 'completed' | 'error'
   salary: 'pending' | 'running' | 'completed' | 'error'
@@ -24,6 +63,19 @@ export interface EvaluatorProgress {
   risk: 'pending' | 'running' | 'completed' | 'error'
   growth: 'pending' | 'running' | 'completed' | 'error'
   summary: 'pending' | 'running' | 'completed' | 'error'
+}
+
+// Per-evaluator results streamed in as each finishes, independent of the
+// final AggregatedReport. The card body reads from here first, falling
+// back to report.evaluators — so the user sees the result the moment that
+// evaluator lands instead of waiting for all 5 +summary to complete.
+export interface PartialEvaluatorResults {
+  job_fit?: JobFitResult
+  salary?: SalaryResult
+  preference?: PreferenceResult
+  risk?: RiskResult
+  growth?: GrowthResult
+  summary?: { job_summary: string; reasoning: string }
 }
 
 const INITIAL_PROGRESS: EvaluatorProgress = {
@@ -51,6 +103,11 @@ interface TabSession {
   report: AggregatedReport | null
   error: string | null
   progress: EvaluatorProgress
+  activity: EvaluatorActivity
+  // Per-evaluator results streamed in as each finishes. Cleared on new run.
+  // Kept alongside (not in) the report so the body of each card can render
+  // the moment that evaluator completes, not when the full report aggregates.
+  evaluatorResults: PartialEvaluatorResults
   resumeStatus: ResumeStatus
   resumeMarkdown: string | null
   resumeSummary: string | null
@@ -69,6 +126,8 @@ const DEFAULT_SESSION: TabSession = {
   report: null,
   error: null,
   progress: INITIAL_PROGRESS,
+  activity: {},
+  evaluatorResults: {},
   resumeStatus: 'idle',
   resumeMarkdown: null,
   resumeSummary: null,
@@ -126,7 +185,7 @@ export function useTabSessions(
    * Retrieves or initializes a session for the given tab ID.
    */
   const getSession = useCallback((tabId: number): TabSession => {
-    return sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
+    return sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS }, activity: {}, evaluatorResults: {} }
   }, [])
 
   /**
@@ -159,7 +218,7 @@ export function useTabSessions(
    * Updates session state for a tab and triggers a re-render if it's active.
    */
   const updateSession = useCallback((tabId: number, patch: Partial<TabSession>) => {
-    const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
+    const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS }, activity: {}, evaluatorResults: {} }
     const newJobId = updateJobIdMapping(tabId, session, patch)
     sessionsRef.current.set(tabId, { ...session, ...patch, hydratedJobId: newJobId ?? null })
   }, [updateJobIdMapping])
@@ -174,7 +233,7 @@ export function useTabSessions(
   // so that sidepanels viewing the same job remain in sync (e.g. flipping to the resume
   // view on one tab updates the other tab's sidepanel to match).
   const updateSessionAndRender = useCallback((tabId: number, patch: Partial<TabSession>) => {
-    const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS } }
+    const session = sessionsRef.current.get(tabId) ?? { ...DEFAULT_SESSION, progress: { ...INITIAL_PROGRESS }, activity: {}, evaluatorResults: {} }
     const oldJobId = session.job?.job_id || session.hydratedJobId
     const newJobId = updateJobIdMapping(tabId, session, patch)
 
@@ -319,11 +378,13 @@ export function useTabSessions(
       }
 
       // Synchronous reset before async IDB fetch — kills stale content immediately.
-      // Note: We MUST call updateJobIdMapping before overwriting sessionsRef to 
+      // Note: We MUST call updateJobIdMapping before overwriting sessionsRef to
       // ensure the old jobId is correctly identified and cleaned up from the mapping.
       const resetSession: TabSession = {
         ...DEFAULT_SESSION,
         progress: { ...INITIAL_PROGRESS },
+        activity: {},
+        evaluatorResults: {},
         status: (jobId ? 'hydrating' : 'idle') as AnalysisStatus,
       }
       if (current) {
@@ -376,6 +437,9 @@ export function useTabSessions(
           resumeStatus: activeSiblingSession.resumeStatus,
           status: activeSiblingSession.status,
           progress: activeSiblingSession.progress,
+          // Adopt the sibling's live streamed results so a tab joining mid-
+          // run immediately shows whatever evaluators have already landed.
+          evaluatorResults: activeSiblingSession.evaluatorResults,
           error: activeSiblingSession.error,
         })
       } else {
@@ -388,7 +452,21 @@ export function useTabSessions(
           resumeSummary: persisted.resumeSummary,
           resumeStatus: (persisted.resumeMarkdown ? 'done' : 'idle') as ResumeStatus,
           status: (wasInterrupted ? 'error' : persisted.report ? 'done' : 'idle') as AnalysisStatus,
-          progress: persisted.report ? { ...COMPLETED_PROGRESS } : { ...INITIAL_PROGRESS },
+          // For a finished run, prefer the persisted per-evaluator progress so
+          // a failed evaluator keeps its 'error' pill on reopen — forcing
+          // COMPLETED_PROGRESS would flip it to 'done'. Older records (saved
+          // before progress was persisted) fall back to COMPLETED_PROGRESS.
+          // Interrupted runs reset to INITIAL_PROGRESS so a killed-mid-run
+          // 'running' entry doesn't show a misleading live spinner.
+          progress: wasInterrupted
+            ? { ...INITIAL_PROGRESS }
+            : persisted.report
+              ? (persisted.progress ? { ...persisted.progress } : { ...COMPLETED_PROGRESS })
+              : { ...INITIAL_PROGRESS },
+          activity: {},
+          // Reload is from a previous completed run — the report itself
+          // contains all evaluator results, so partials are redundant.
+          evaluatorResults: {},
           error: wasInterrupted
             ? 'Previous analysis was interrupted. Click Analyze to retry.'
             : null,
@@ -481,6 +559,8 @@ export function useTabSessions(
                 status: (s.status === 'analyzing' || s.status === 'extracting') ? 'idle' : s.status,
                 resumeStatus: s.resumeStatus === 'generating' ? 'idle' : s.resumeStatus,
                 progress: (s.status === 'analyzing' || s.status === 'extracting') ? { ...INITIAL_PROGRESS } : s.progress,
+                activity: (s.status === 'analyzing' || s.status === 'extracting') ? {} : s.activity,
+                evaluatorResults: (s.status === 'analyzing' || s.status === 'extracting') ? {} : s.evaluatorResults,
               })
               persistSession(tId).catch(() => {})
               if (tId === activeTabIdRef.current) shouldRerender = true
@@ -522,14 +602,49 @@ export function useTabSessions(
   useEffect(() => {
     const listener = (message: AnalysisProgressMessage) => {
       if (message.type === 'ANALYSIS_PROGRESS') {
-        const { tabId, evaluator, status: evalStatus } = message.payload
+        const { tabId, evaluator } = message.payload
         const session = sessionsRef.current.get(tabId)
         // Skip if no session exists — don't spawn a default one for a stale
         // progress message. updateSessionAndRender would auto-create otherwise.
         if (!session) return
-        updateSessionAndRender(tabId, {
-          progress: { ...session.progress, [evaluator]: evalStatus },
-        })
+        const kind = message.payload.kind ?? 'status'
+        if (kind === 'tool' && message.payload.tool) {
+          const t = message.payload.tool
+          const display = t.name === 'web_search'
+            ? (t.args.query ?? '')
+            : (t.args.url ?? '')
+          // Drop late events for an already-completed evaluator or events
+          // older than what's already on screen (per-evaluator seq is monotonic).
+          const current = session.activity[evaluator as keyof EvaluatorActivity]
+          if (current && current.seq > t.seq) return
+          updateSessionAndRender(tabId, {
+            activity: { ...session.activity, [evaluator]: { name: t.name, display, seq: t.seq } },
+          })
+        } else if (kind === 'result' && message.payload.result !== undefined) {
+          // Streamed per-evaluator result. Merge into evaluatorResults so
+          // the card body renders the moment this evaluator lands — no
+          // more empty dropdown between "completed" status and report.
+          // Sibling-tab propagation in updateSessionAndRender will spread
+          // the merged map, so tabs viewing the same job stay in sync.
+          const slot = evaluator as keyof PartialEvaluatorResults
+          if (!isEvaluatorSlot(slot)) return
+          updateSessionAndRender(tabId, {
+            evaluatorResults: { ...session.evaluatorResults, [slot]: message.payload.result },
+          })
+        } else if (message.payload.status) {
+          const evalStatus = message.payload.status
+          // Clear in-flight tool activity when the evaluator finishes/errors
+          // (or when it starts — old activity from a previous run could
+          // otherwise linger). Reset to undefined for the relevant key.
+          const nextActivity: EvaluatorActivity = { ...session.activity }
+          if (evalStatus === 'completed' || evalStatus === 'error') {
+            delete (nextActivity as Record<string, unknown>)[evaluator]
+          }
+          updateSessionAndRender(tabId, {
+            progress: { ...session.progress, [evaluator]: evalStatus },
+            activity: nextActivity,
+          })
+        }
       }
     }
     chrome.runtime.onMessage.addListener(listener)
@@ -678,6 +793,10 @@ export function useTabSessions(
         error: null,
         report: null,
         progress: { ...INITIAL_PROGRESS },
+        activity: {},
+        // Clear streamed per-evaluator results from any previous run so
+        // the cards start empty.
+        evaluatorResults: {},
       })
       // Persist the analyzing state BEFORE kicking off the run so an interrupted
       // run (panel closed mid-analyze) is guaranteed to be recoverable on rehydrate.
@@ -722,6 +841,8 @@ export function useTabSessions(
       status: (session.status === 'analyzing' || session.status === 'extracting') ? 'idle' : session.status,
       error: null,
       progress: (session.status === 'analyzing' || session.status === 'extracting') ? { ...INITIAL_PROGRESS } : session.progress,
+      activity: (session.status === 'analyzing' || session.status === 'extracting') ? {} : session.activity,
+      evaluatorResults: (session.status === 'analyzing' || session.status === 'extracting') ? {} : session.evaluatorResults,
       resumeStatus: session.resumeStatus === 'generating' ? 'idle' : session.resumeStatus,
       resumeError: session.resumeStatus === 'generating' ? null : session.resumeError,
     })
@@ -737,13 +858,15 @@ export function useTabSessions(
           if (tId === tabId) continue
           const s = sessionsRef.current.get(tId)
           if (s) {
-            sessionsRef.current.set(tId, {
-              ...s,
-              status: (s.status === 'analyzing' || s.status === 'extracting') ? 'idle' : s.status,
-              progress: (s.status === 'analyzing' || s.status === 'extracting') ? { ...INITIAL_PROGRESS } : s.progress,
-              resumeStatus: s.resumeStatus === 'generating' ? 'idle' : s.resumeStatus,
-              resumeError: s.resumeStatus === 'generating' ? null : s.resumeError,
-            })
+          sessionsRef.current.set(tId, {
+            ...s,
+            status: (s.status === 'analyzing' || s.status === 'extracting') ? 'idle' : s.status,
+            progress: (s.status === 'analyzing' || s.status === 'extracting') ? { ...INITIAL_PROGRESS } : s.progress,
+            activity: (s.status === 'analyzing' || s.status === 'extracting') ? {} : s.activity,
+            evaluatorResults: (s.status === 'analyzing' || s.status === 'extracting') ? {} : s.evaluatorResults,
+            resumeStatus: s.resumeStatus === 'generating' ? 'idle' : s.resumeStatus,
+            resumeError: s.resumeStatus === 'generating' ? null : s.resumeError,
+          })
             persistSession(tId).catch(() => {})
             if (tId === activeTabIdRef.current) shouldRerender = true
           }
@@ -772,6 +895,8 @@ export function useTabSessions(
       report: null,
       error: null,
       progress: { ...INITIAL_PROGRESS },
+      activity: {},
+      evaluatorResults: {},
       qnaHistory: [],
       hydratedJobId: null,
       resumeStatus: 'idle',
@@ -991,6 +1116,10 @@ export function useTabSessions(
     report: current.report,
     error: current.error,
     progress: current.progress,
+    activity: current.activity,
+    // Per-evaluator results streamed in as each finishes. Used by the
+    // report UI so each card body renders the moment that evaluator lands.
+    evaluatorResults: current.evaluatorResults,
     extract,
     analyze,
     stop,

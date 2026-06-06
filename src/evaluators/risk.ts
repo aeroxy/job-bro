@@ -1,8 +1,16 @@
-import type { ChatMessage } from '@/lib/llm-client'
+import type { ChatMessage, JsonSchemaSpec } from '@/lib/llm-client'
 import { runAgentWithValidation, executeTool } from '@/lib/agent'
-import { ALL_TOOLS } from '@/lib/tools/definitions'
+import type { ToolDefinition } from '@/lib/tools/types'
 import type { RiskResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
+import type { ToolCall } from '@/lib/tools/types'
+import { RISK_SCHEMA } from './schemas'
+
+export const RISK_SCHEMA_NAME = 'risk_result'
+export const RISK_JSON_SCHEMA: JsonSchemaSpec = {
+  name: RISK_SCHEMA_NAME,
+  schema: RISK_SCHEMA as unknown as Record<string, unknown>,
+}
 
 const PROMPT = `You are a job posting risk analyst. Identify red flags across these categories (use the "type" field):
 - under_leveling, overqualification
@@ -20,14 +28,19 @@ Calibration for senior/executive roles (CTO, VP, Director, Principal):
 
 For more junior IC roles, do not over-penalize normal startup ambiguity.
 
-You have access to two tools: \`google_search\` (for finding public information about a company, role, or market) and \`read_page\` (for reading a specific URL). Use them when the JD lacks information you would need to assess risk — e.g., a company name you'd otherwise have to guess at, or an unfamiliar role. Do not call tools for facts already present in the JD. When you are done, output the compact JSON described above.`
+You have access to two tools: \`web_search\` (for finding public information about a company, role, or market) and \`read_page\` (for reading a specific URL). Use them when the JD lacks information you would need to assess risk — e.g., a company name you'd otherwise have to guess at, or an unfamiliar role. Do not call tools for facts already present in the JD.
+
+Evidences: list the sources you actually relied on in an "evidences" array of {"title":"","url":"","snippet":""}. Each entry must be a page you read (or a search result you clicked through and read); do not include searches you didn't act on. If you didn't use any tools, emit "evidences": [].`
 
 export async function runRiskEvaluator(
   jobContent: string,
   profile: UserProfile,
   config: LLMConfig,
   customPrompt: string,
-  signal?: AbortSignal
+  tools: ToolDefinition[],
+  onToolCall?: (call: ToolCall) => void,
+  signal?: AbortSignal,
+  jsonSchema?: JsonSchemaSpec
 ): Promise<RiskResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -41,7 +54,7 @@ export async function runRiskEvaluator(
     messages.push({ role: 'system', content: `<candidate_experience>\n${parts.join('\n')}\n</candidate_experience>` })
   }
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
-{"overall_risk":"low","flags":[{"type":"other","description":"","severity":"low"}],"summary":""}` })
+{"overall_risk":"low","flags":[{"type":"other","description":"","severity":"low"}],"summary":"","evidences":[]}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
   messages.push({ role: 'user', content: PROMPT })
 
@@ -49,15 +62,18 @@ export async function runRiskEvaluator(
     config,
     messages,
     {
-      tools: ALL_TOOLS,
+      tools,
       executeTool,
       validate: (r) => {
         if (!['low', 'medium', 'high'].includes(r.overall_risk as string))
           return '"overall_risk" must be "low", "medium", or "high"'
         if (!Array.isArray(r.flags)) return '"flags" must be an array'
+        if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
         return null
       },
       signal,
+      onToolCall,
+      jsonSchema,
     }
   )
 }

@@ -65,7 +65,7 @@ User → LinkedIn Job Page
 
 The offscreen is the only place with access to `LanguageModel` (Gemini Nano) and the only place that parses HTML for tools. The service worker serializes everything through it:
 
-- **Tools** (`google_search`, `read_page`): service worker fetches the URL with `AbortSignal.timeout(20s)`, then sends the raw HTML to offscreen with `PARSE_HTML` + `mode`. Background's `onMessage` returns `false` for `PARSE_HTML` so the offscreen's `sendResponse` wins.
+- **Tools** (`web_search`, `read_page`): service worker fetches the URL with `AbortSignal.timeout(20s)`, then sends the raw HTML to offscreen with `PARSE_HTML`. Background's `onMessage` returns `false` for `PARSE_HTML` so the offscreen's `sendResponse` wins.
 - **Chrome AI**: every call goes through a single FIFO `withChromeAiLock` inside the offscreen. Persistent chat sessions (one per `useChromeChatSession` instance) are stored in a `Map<sessionId, ChromeAiSession>` and addressed by id. The sidepanel/background hold only the id, not the object.
 
 ### AbortController Tracking
@@ -99,7 +99,7 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `CHAT_REQUEST` | sidepanel → background | Follow-up Q&A question |
 | `CHAT_RESPONSE` | background → sidepanel | Q&A answer |
 | `CHAT_ERROR` | background → sidepanel | Q&A failure |
-| `PARSE_HTML` | any → offscreen | `{ html, mode: 'google_search' \| 'read_page' }` → `{ markdown, trimmed }` |
+| `PARSE_HTML` | any → offscreen | `{ html }` → `{ markdown, trimmed }` |
 | `CHROME_AI_CHAT` | any → offscreen | One-shot completion; returns `{ result: string }` |
 | `CHROME_AI_AVAILABILITY` | any → offscreen | Returns `{ result: ChromeAiAvailability }` |
 | `CHROME_AI_DOWNLOAD` | any → offscreen | Triggers model download; returns `{ result: void }` |

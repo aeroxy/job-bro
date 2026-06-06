@@ -1,9 +1,17 @@
 import { validateNumbers, buildPreferencesContext } from '@/lib/llm-client'
-import type { ChatMessage } from '@/lib/llm-client'
+import type { ChatMessage, JsonSchemaSpec } from '@/lib/llm-client'
 import { runAgentWithValidation, executeTool } from '@/lib/agent'
-import { ALL_TOOLS } from '@/lib/tools/definitions'
+import type { ToolDefinition } from '@/lib/tools/types'
 import type { PreferenceResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
+import type { ToolCall } from '@/lib/tools/types'
+import { PREFERENCE_SCHEMA } from './schemas'
+
+export const PREFERENCE_SCHEMA_NAME = 'preference_result'
+export const PREFERENCE_JSON_SCHEMA: JsonSchemaSpec = {
+  name: PREFERENCE_SCHEMA_NAME,
+  schema: PREFERENCE_SCHEMA as unknown as Record<string, unknown>,
+}
 
 const PROMPT = `You are a career advisor comparing job preferences vs job posting.
 Identify 'Remote/Onsite' status and 'Employment Type' (e.g., Contract, Full-time) by scanning the full Description text.
@@ -17,20 +25,25 @@ Write the "summary" field as a structured markdown report covering only the cand
 - **Deal Breakers:** bullet list of any conflicts (omit section if none)
 - A short closing sentence on overall preference alignment
 
-Use concise, direct language. Do not include a title or heading — start directly with **Location:**.`
+Use concise, direct language. Do not include a title or heading — start directly with **Location:**.
+
+Evidences: if you used web_search or read_page (e.g. to verify the company's actual HQ/team size, or to look up a public industry classification), list the sources you actually relied on in an "evidences" array of {"title":"","url":"","snippet":""}. If you didn't use any tools, emit "evidences": [].`
 
 export async function runPreferenceEvaluator(
   jobContent: string,
   profile: UserProfile,
   config: LLMConfig,
   customPrompt: string,
-  signal?: AbortSignal
+  tools: ToolDefinition[],
+  onToolCall?: (call: ToolCall) => void,
+  signal?: AbortSignal,
+  jsonSchema?: JsonSchemaSpec
 ): Promise<PreferenceResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
   messages.push({ role: 'system', content: buildPreferencesContext(profile) })
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
-{"alignment_score":0.0,"conflicts":[{"category":"","expected":"","actual":"","severity":"low"}],"matches":[],"summary":""}` })
+{"alignment_score":0.0,"conflicts":[{"category":"","expected":"","actual":"","severity":"low"}],"matches":[],"summary":"","evidences":[]}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
   messages.push({ role: 'user', content: PROMPT })
 
@@ -38,14 +51,20 @@ export async function runPreferenceEvaluator(
     config,
     messages,
     {
-      tools: ALL_TOOLS,
+      tools,
       executeTool,
-      validate: (r) =>
-        validateNumbers(r, ['alignment_score']) ??
-        (Array.isArray(r.conflicts) && Array.isArray(r.matches)
-          ? null
-          : '"conflicts" and "matches" must be arrays'),
+      validate: (r) => {
+        const base = validateNumbers(r, ['alignment_score']) ??
+          (Array.isArray(r.conflicts) && Array.isArray(r.matches)
+            ? null
+            : '"conflicts" and "matches" must be arrays')
+        if (base) return base
+        if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
+        return null
+      },
       signal,
+      onToolCall,
+      jsonSchema,
     }
   )
 }

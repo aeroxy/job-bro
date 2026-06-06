@@ -1,9 +1,17 @@
 import { buildSalaryContext } from '@/lib/llm-client'
-import type { ChatMessage } from '@/lib/llm-client'
+import type { ChatMessage, JsonSchemaSpec } from '@/lib/llm-client'
 import { runAgentWithValidation, executeTool } from '@/lib/agent'
-import { ALL_TOOLS } from '@/lib/tools/definitions'
+import type { ToolDefinition } from '@/lib/tools/types'
 import type { SalaryResult } from '@/types/evaluation'
 import type { LLMConfig, UserProfile } from '@/types/profile'
+import type { ToolCall } from '@/lib/tools/types'
+import { SALARY_SCHEMA } from './schemas'
+
+export const SALARY_SCHEMA_NAME = 'salary_result'
+export const SALARY_JSON_SCHEMA: JsonSchemaSpec = {
+  name: SALARY_SCHEMA_NAME,
+  schema: SALARY_SCHEMA as unknown as Record<string, unknown>,
+}
 
 const PROMPT = `You are a compensation analyst. Estimate salary range and assess alignment with candidate expectations.
 Carefully scan the entire Description for compensation signals (ranges, equity, or currency) as they may be buried in the text.
@@ -19,20 +27,25 @@ expectation_alignment semantics (from the CANDIDATE'S perspective):
 - "above": the job's range is ABOVE the candidate's expectation → candidate will likely earn more than expected → good outcome
 - "within": candidate's expectation falls within the job's range → good match
 - "below": the job's range is BELOW the candidate's expectation → role likely underpays → bad outcome
-Set risk_flag to true only when alignment is "below" (job underpays) or there is a meaningful risk the offer won't meet expectations.`
+Set risk_flag to true only when alignment is "below" (job underpays) or there is a meaningful risk the offer won't meet expectations.
+
+Evidences: if you used web_search or read_page (e.g. to look up market rates for this role/region, or to read the employer's comp philosophy page), list the sources you actually relied on in an "evidences" array of {"title":"","url":"","snippet":""}. If you didn't use any tools, emit "evidences": [].`
 
 export async function runSalaryEvaluator(
   jobContent: string,
   profile: UserProfile,
   config: LLMConfig,
   customPrompt: string,
-  signal?: AbortSignal
+  tools: ToolDefinition[],
+  onToolCall?: (call: ToolCall) => void,
+  signal?: AbortSignal,
+  jsonSchema?: JsonSchemaSpec
 ): Promise<SalaryResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
   messages.push({ role: 'system', content: buildSalaryContext(profile) })
   messages.push({ role: 'system', content: `Output compact JSON only, no whitespace outside strings:
-{"estimated_range":{"min":0,"max":0,"currency":"USD"},"expectation_alignment":"within","risk_flag":false,"reasoning":""}` })
+{"estimated_range":{"min":0,"max":0,"currency":"USD"},"expectation_alignment":"within","risk_flag":false,"reasoning":"","evidences":[]}` })
   messages.push({ role: 'user', content: `<jd>\n${jobContent}\n</jd>` })
   messages.push({ role: 'user', content: PROMPT })
 
@@ -40,7 +53,7 @@ export async function runSalaryEvaluator(
     config,
     messages,
     {
-      tools: ALL_TOOLS,
+      tools,
       executeTool,
       validate: (r) => {
         if (!r.estimated_range || typeof r.estimated_range !== 'object')
@@ -50,9 +63,12 @@ export async function runSalaryEvaluator(
           return '"estimated_range.min" and "max" must be numbers'
         if (!['below', 'within', 'above'].includes(r.expectation_alignment as string))
           return '"expectation_alignment" must be "below", "within", or "above"'
+        if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
         return null
       },
       signal,
+      onToolCall,
+      jsonSchema,
     }
   )
 }

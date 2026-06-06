@@ -1,4 +1,5 @@
 import { runAnalysis, runChat, runResume } from '@/lib/llm-handlers'
+import type { EvaluatorResultCallback, ToolCallCallback } from '@/lib/llm-handlers'
 import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
 
 const analysisControllers = new Map<number, AbortController>()
@@ -249,17 +250,51 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
  */
 async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal, tabId: number) {
   // Make sure the offscreen parser is alive before evaluators may try to
-  // call google_search / read_page.
+  // call web_search / read_page.
   await ensureOffscreen()
 
   const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
     chrome.runtime.sendMessage({
       type: 'ANALYSIS_PROGRESS',
-      payload: { tabId, evaluator, status },
+      payload: { tabId, evaluator, kind: 'status', status },
     }).catch(() => { /* no listeners */ })
   }
 
-  const result = await runAnalysis(job, signal, onProgress)
+  // Per-evaluator monotonic counter — lets the sidepanel dedupe / supersede
+  // in-flight tool activity (the latest "Searching X" replaces the previous one
+  // for the same evaluator's display row).
+  const toolSeqRef = { current: new Map<string, number>() }
+  const onToolCall: ToolCallCallback = (evaluator, call) => {
+    const seq = (toolSeqRef.current.get(evaluator) ?? 0) + 1
+    toolSeqRef.current.set(evaluator, seq)
+    let args: Record<string, string> = {}
+    try {
+      const parsed = JSON.parse(call.function.arguments) as Record<string, unknown>
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string') args[k] = v
+      }
+    } catch {
+      /* malformed args — fall through with empty args */
+    }
+    const name = call.function.name
+    if (name !== 'web_search' && name !== 'read_page') return
+    chrome.runtime.sendMessage({
+      type: 'ANALYSIS_PROGRESS',
+      payload: { tabId, evaluator, kind: 'tool', tool: { name, args, seq } },
+    }).catch(() => { /* no listeners */ })
+  }
+
+  // Stream each evaluator's result as soon as it lands so the sidepanel can
+  // render that card's body immediately, not after the aggregator has
+  // bundled all of them. See AnalysisProgressMessage `kind: 'result'`.
+  const onEvaluatorResult: EvaluatorResultCallback = (evaluator, result) => {
+    chrome.runtime.sendMessage({
+      type: 'ANALYSIS_PROGRESS',
+      payload: { tabId, evaluator, kind: 'result', result },
+    }).catch(() => { /* no listeners */ })
+  }
+
+  const result = await runAnalysis(job, signal, onProgress, onToolCall, onEvaluatorResult)
   if (result.ok) return { type: 'ANALYSIS_RESULT', payload: result.report }
   return { type: 'ANALYSIS_ERROR', error: result.error }
 }
