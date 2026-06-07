@@ -473,7 +473,7 @@ function RiskDetail({ result }: { result: import('@/types/evaluation').RiskResul
     medium: 'text-yellow-600 dark:text-yellow-400',
     high: 'text-red-600 dark:text-red-400',
   }
-  const flags = arr(result.flags).filter((f) => str(f.description).trim().length > 0)
+  const flags = arr(result.flags).filter((f) => f && str(f.description).trim().length > 0)
 
   return (
     <div className="space-y-1.5 pt-1">
