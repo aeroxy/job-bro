@@ -40,11 +40,13 @@ interface ResumeResult {
 // everything after is the change-log summary. No delimiter → treat the whole
 // thing as the resume with an empty summary (validate() then triggers a retry).
 function splitResumeOutput(raw: string): ResumeResult {
-  const idx = raw.indexOf(DELIMITER)
-  if (idx === -1) return { resume: raw.trim(), summary: '' }
+  // Tolerate minor LLM formatting drift in the delimiter (case, surrounding
+  // whitespace, dash count) so a near-miss doesn't cost a full retry.
+  const match = raw.match(/---+\s*SUMMARY\s*---+/i)
+  if (!match || match.index === undefined) return { resume: raw.trim(), summary: '' }
   return {
-    resume: raw.slice(0, idx).trim(),
-    summary: raw.slice(idx + DELIMITER.length).trim(),
+    resume: raw.slice(0, match.index).trim(),
+    summary: raw.slice(match.index + match[0].length).trim(),
   }
 }
 
