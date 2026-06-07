@@ -83,9 +83,12 @@ function cleanDdgRedirects(md: string): string {
     try {
       const target = new URL('https:' + match).searchParams.get('uddg')
       if (!target) return match
-      if (target.includes('/y.js')) {
-        const real = new URL(target).searchParams.get('u3')
-        return real ?? ''
+      const targetUrl = new URL(target)
+      // Ad redirect: duckduckgo.com/y.js with the real target double-encoded
+      // in `u3`. Match on host+path so legit URLs that merely contain "/y.js"
+      // (e.g. a repo/CDN path) aren't mistaken for ads and dropped.
+      if (targetUrl.hostname.endsWith('duckduckgo.com') && targetUrl.pathname === '/y.js') {
+        return targetUrl.searchParams.get('u3') ?? ''
       }
       return target
     } catch {
