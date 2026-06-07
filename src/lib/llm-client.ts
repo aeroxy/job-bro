@@ -212,7 +212,7 @@ export function parseJSON<T>(raw: string): T {
   // A bare "null"/primitive parses fine but then crashes the validators with an
   // opaque "Cannot read properties of null" — reject it here with a clear error.
   const asObject = (val: unknown): T => {
-    if (val === null || typeof val !== 'object') throw new Error('not a JSON object')
+    if (val === null || typeof val !== 'object' || Array.isArray(val)) throw new Error('not a JSON object')
     return val as T
   }
 
