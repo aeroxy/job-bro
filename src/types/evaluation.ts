@@ -84,7 +84,10 @@ export interface GrowthResult {
 export type Verdict = 'Strong Apply' | 'Maybe' | 'Skip'
 
 export interface EvaluatorStatus<T> {
-  status: 'fulfilled' | 'rejected'
+  // 'blocked' — never ran because an upstream dependency failed (or was itself
+  // blocked). Distinct from 'rejected' (ran and threw) so the UI can say
+  // "skipped" rather than "failed" and offer a resume. No result, no error.
+  status: 'fulfilled' | 'rejected' | 'blocked'
   result?: T
   error?: string
 }

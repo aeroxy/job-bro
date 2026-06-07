@@ -16,13 +16,15 @@ export interface AnalysisRecord {
 
 export type PersistedAnalysisStatus = 'idle' | 'extracting' | 'analyzing' | 'done' | 'error'
 
+type PersistedProgressStatus = 'pending' | 'running' | 'completed' | 'error' | 'blocked'
+
 export interface PersistedEvaluatorProgress {
-  job_fit: 'pending' | 'running' | 'completed' | 'error'
-  salary: 'pending' | 'running' | 'completed' | 'error'
-  preference: 'pending' | 'running' | 'completed' | 'error'
-  risk: 'pending' | 'running' | 'completed' | 'error'
-  growth: 'pending' | 'running' | 'completed' | 'error'
-  summary: 'pending' | 'running' | 'completed' | 'error'
+  job_fit: PersistedProgressStatus
+  salary: PersistedProgressStatus
+  preference: PersistedProgressStatus
+  risk: PersistedProgressStatus
+  growth: PersistedProgressStatus
+  summary: PersistedProgressStatus
 }
 
 export interface PersistedSession {

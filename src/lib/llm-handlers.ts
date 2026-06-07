@@ -27,7 +27,7 @@ export type ChatResult =
   | { ok: true; answer: string }
   | { ok: false; error: string }
 
-export type ProgressCallback = (evaluator: string, status: 'running' | 'completed' | 'error') => void
+export type ProgressCallback = (evaluator: string, status: 'running' | 'completed' | 'error' | 'blocked') => void
 export type ToolCallCallback = (evaluator: string, call: ToolCall) => void
 // Streamed per-evaluator result. Fires once after each evaluator finishes,
 // independent of the aggregator. Lets the sidepanel render each card body
@@ -62,6 +62,8 @@ export async function runAnalysis(
   onProgress?: ProgressCallback,
   onToolCall?: ToolCallCallback,
   onEvaluatorResult?: EvaluatorResultCallback,
+  // Resume: fulfilled results from a prior run to reuse instead of re-running.
+  priorResults?: Partial<AggregatedReport['evaluators']>,
 ): Promise<AnalyzeResult> {
   const loaded = await loadConfigAndProfile()
   if (!loaded.ok) return loaded
@@ -76,6 +78,7 @@ export async function runAnalysis(
       onToolCall,
       signal,
       onEvaluatorResult,
+      priorResults,
     )
     return { ok: true, report }
   } catch (e) {

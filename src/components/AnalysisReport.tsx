@@ -5,6 +5,7 @@ import {
   ExternalLink,
   Heart,
   Lightbulb,
+  RotateCw,
   Sparkles,
   Target,
   TrendingUp,
@@ -46,9 +47,13 @@ interface AnalysisReportProps {
   onSetChatLoading?: (tabId: number, loading: boolean, nonce?: number) => void
   onBumpChatNonce?: (tabId: number) => number
   onDeleteChatTurn?: (index: number) => void
+  // Resume a partially-failed run: re-runs the failed evaluators + their
+  // dependents. Surfaced via the Continue banner when the run settled with
+  // any errored/blocked evaluator.
+  onContinue?: () => void
 }
 
-export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, chatLoading, currentTabId, useChromeBackend, profile, customPrompt, activity, evaluatorResults, onAppendChat, onSetChatLoading, onBumpChatNonce, onDeleteChatTurn }: AnalysisReportProps) {
+export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, chatLoading, currentTabId, useChromeBackend, profile, customPrompt, activity, evaluatorResults, onAppendChat, onSetChatLoading, onBumpChatNonce, onDeleteChatTurn, onContinue }: AnalysisReportProps) {
   const jobMarkdown = useMemo(() => (job ? jobToMarkdown(job) : ''), [job])
   const analysisContext = useMemo(() => (report ? formatAnalysisContext(report) : ''), [report])
 
@@ -88,8 +93,33 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
     return s?.status === 'rejected' ? s.error : undefined
   }
 
+  // The run has settled with at least one evaluator failed or blocked — offer
+  // a Continue that re-runs the failed evaluators + everything depending on
+  // them (reusing the successful results).
+  const canContinue =
+    !analyzing &&
+    !!onContinue &&
+    Object.values(progress).some((s) => s === 'error' || s === 'blocked')
+
   return (
     <div className="space-y-3">
+      {canContinue && (
+        <div className="border border-amber-500/50 bg-amber-50/60 dark:bg-amber-900/20 rounded-lg p-3 flex items-center justify-between gap-3">
+          <div className="flex items-start gap-2 min-w-0">
+            <AlertTriangle className="size-3.5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+            <p className="text-xs text-amber-800 dark:text-amber-200">
+              An evaluator failed, so the steps depending on it were skipped. Continue to re-run them.
+            </p>
+          </div>
+          <button
+            onClick={onContinue}
+            className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-amber-600 text-white hover:bg-amber-700 transition-colors cursor-pointer"
+          >
+            <RotateCw className="size-3" />
+            Continue
+          </button>
+        </div>
+      )}
       {/* Summary (synthesizes verdict + job_summary + reasoning once all
           5 evaluators are done). Has its own status pill — runs last. */}
       <SummaryCard
@@ -242,7 +272,7 @@ function SummaryCard({
   report,
   summary,
 }: {
-  status: 'pending' | 'running' | 'completed' | 'error'
+  status: EvaluatorProgress['summary']
   report: AggregatedReport | null
   summary?: { job_summary: string; reasoning: string }
 }) {

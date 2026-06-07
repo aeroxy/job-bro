@@ -42,6 +42,7 @@ export function EvaluatorCard({
         <HeaderRow title={title} icon={icon} status={status} />
         <ActivityLine activity={activity} />
         {status === 'error' && error && <ErrorLine message={error} />}
+        {status === 'blocked' && <BlockedLine />}
       </div>
     )
   }
@@ -98,6 +99,16 @@ function ErrorLine({ message }: { message: string }) {
   return (
     <div className="px-3 py-1.5 border-t text-[10px] text-red-700 dark:text-red-300 bg-red-50/50 dark:bg-red-900/20 break-words">
       {message}
+    </div>
+  )
+}
+
+// Sub-line shown when an evaluator was skipped because an upstream evaluator
+// it depends on failed. "Continue" (see AnalysisReport) re-runs it.
+function BlockedLine() {
+  return (
+    <div className="px-3 py-1.5 border-t text-[10px] text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-900/20">
+      Skipped — an evaluator it depends on failed. Continue to re-run.
     </div>
   )
 }

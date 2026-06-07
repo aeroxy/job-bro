@@ -29,7 +29,14 @@ export type JDExtractionFailedMessage = {
 export type AnalyzeJDMessage = {
   type: 'ANALYZE_JD'
   tabId: number
-  payload: { job: ExtractedJob }
+  payload: {
+    job: ExtractedJob
+    // Resume support: successful evaluator results from a previous (partially
+    // failed) run. The runner reuses these and only re-runs the missing ones
+    // (the failed evaluators + everything depending on them). Absent on a
+    // fresh run. See useTabSessions.continueAnalysis.
+    priorResults?: Partial<AggregatedReport['evaluators']>
+  }
 }
 
 // Background -> Sidebar: analysis complete
@@ -53,7 +60,7 @@ export type AnalysisProgressMessage = {
     tabId: number
     evaluator: string
     kind?: 'status' | 'tool' | 'result'
-    status?: 'running' | 'completed' | 'error'
+    status?: 'running' | 'completed' | 'error' | 'blocked'
     tool?: {
       name: 'web_search' | 'read_page'
       args: Record<string, string>

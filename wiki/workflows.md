@@ -135,6 +135,13 @@ If the user has configured a custom system prompt, it will be the first system p
 
 ## Error Handling
 
+- **Evaluator failure (fail-fast + resume):** the pipeline stops along a failed
+  branch instead of degrading. A failed evaluator's dependents are marked
+  `blocked` (shown as "Skipped"), and the partial report is **not** saved to
+  history. `AnalysisReport` shows a **Continue** banner; clicking it
+  (`continueAnalysis`) re-runs the failed evaluators + their dependents, reusing
+  the successful results via `priorResults`. See [evaluators.md](evaluators.md)
+  for the dependency graph.
 - **Duplicate analysis (same job_id):** analyze() returns the existing in-flight
   promise. This prevents redundant API calls when the user clicks "Analyze" on
   multiple tabs viewing the same job.
