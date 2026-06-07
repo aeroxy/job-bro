@@ -204,14 +204,21 @@ export function parseJSON<T>(raw: string): T {
   const objectMatch = raw.match(/\{[\s\S]*\}/)
   const candidate = fenceMatch ? fenceMatch[1] : objectMatch ? objectMatch[0] : raw
 
+  // A bare "null"/primitive parses fine but then crashes the validators with an
+  // opaque "Cannot read properties of null" — reject it here with a clear error.
+  const asObject = (val: unknown): T => {
+    if (val === null || typeof val !== 'object') throw new Error('not a JSON object')
+    return val as T
+  }
+
   try {
-    return JSON.parse(candidate) as T
+    return asObject(JSON.parse(candidate))
   } catch {
     // LLMs routinely emit unescaped quotes/newlines inside strings, trailing
     // commas, or truncated tails. jsonrepair fixes the common cases before we
     // give up — a last resort, not the happy path.
     try {
-      return JSON.parse(jsonrepair(candidate)) as T
+      return asObject(JSON.parse(jsonrepair(candidate)))
     } catch (e) {
       throw new Error(`Failed to parse LLM response as JSON: ${(e as Error).message}: ${raw.slice(0, 200)}`)
     }
