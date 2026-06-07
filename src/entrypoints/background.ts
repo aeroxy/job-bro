@@ -133,7 +133,7 @@ export default defineBackground(() => {
         }
         const controller = new AbortController()
         analysisControllers.set(tabId, controller)
-        handleAnalyzeJD(message.payload.job, controller.signal, tabId).then((result) => {
+        handleAnalyzeJD(message.payload.job, controller.signal, tabId, message.payload.priorResults).then((result) => {
           if (analysisControllers.get(tabId) === controller) {
             analysisControllers.delete(tabId)
           }
@@ -272,7 +272,12 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
  * @param tabId - The initiator tab ID.
  * @returns A promise resolving to the analysis result message.
  */
-async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: AbortSignal, tabId: number) {
+async function handleAnalyzeJD(
+  job: import('@/types/job').ExtractedJob,
+  signal: AbortSignal,
+  tabId: number,
+  priorResults?: Partial<import('@/types/evaluation').AggregatedReport['evaluators']>,
+) {
   // Make sure the offscreen parser is alive before evaluators may try to
   // call web_search / read_page.
   await ensureOffscreen()
@@ -280,7 +285,7 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
   // Guard every late callback: once this run's signal is aborted (the user
   // stopped it, or a newer analysis superseded it), suppress its messages so a
   // cancelled run can't overwrite the new run's state for this tab.
-  const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
+  const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error' | 'blocked') => {
     if (signal.aborted) return
     chrome.runtime.sendMessage({
       type: 'ANALYSIS_PROGRESS',
@@ -324,7 +329,7 @@ async function handleAnalyzeJD(job: import('@/types/job').ExtractedJob, signal: 
     }).catch(() => { /* no listeners */ })
   }
 
-  const result = await runAnalysis(job, signal, onProgress, onToolCall, onEvaluatorResult)
+  const result = await runAnalysis(job, signal, onProgress, onToolCall, onEvaluatorResult, priorResults)
   if (result.ok) return { type: 'ANALYSIS_RESULT', payload: result.report }
   return { type: 'ANALYSIS_ERROR', error: result.error }
 }

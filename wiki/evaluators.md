@@ -4,11 +4,26 @@ All evaluators live in `src/evaluators/`. They run in parallel via `runner.ts` a
 
 ## Runner (`runner.ts`)
 
-`runAllEvaluators(job, profile, config, customPrompt, onProgress, onToolCall?)` orchestrates execution:
+`runAllEvaluators(job, profile, config, customPrompt, onProgress, onToolCall?, signal?, onEvaluatorResult?, priorResults?)` orchestrates execution:
 
-- Wraps each evaluator in `runWithTracking<T>()` for error isolation and progress reporting
-- Runs all 5 via `Promise.all` — a single failure doesn't block others
-- Calls `onProgress(name, status)` after each evaluator settles
+- **Staged, dependency-aware, fail-fast.** Order: `preference` (first, to warm the
+  LLM KV cache) → `[job_fit, salary]` (parallel) → `[risk, growth]` (parallel) →
+  `summary`. Hard deps: `risk`←`job_fit`+`salary`; `growth`←`job_fit`;
+  `summary`←all 5.
+- An evaluator runs only once its deps have **fulfilled**. If a dep failed (or was
+  itself blocked), the evaluator is marked **`blocked`** (a distinct
+  `EvaluatorStatus.status`) and never runs — the pipeline stops along that branch
+  instead of degrading to a JD-only fallback. Parallel siblings still settle in
+  full (`stageRun` never throws), so an in-flight sibling isn't aborted when its
+  partner fails.
+- `runWithTracking<T>()` captures a thrown evaluator as `{status:'rejected'}`;
+  `stageRun` then propagates `blocked` to dependents via the `ok()` check.
+- **Resume:** `priorResults` (a `Partial<AggregatedReport['evaluators']>` of
+  previously-fulfilled results) is reused instead of re-run, so the UI's
+  "Continue" re-runs only the failed evaluators + their dependents. See
+  `useTabSessions.continueAnalysis` and `AnalysisReport`'s Continue banner.
+- Calls `onProgress(name, status)` after each evaluator settles (status is
+  `running | completed | error | blocked`)
 - Calls `onToolCall(evaluatorName, ToolCall)` whenever an evaluator's agent loop
   is about to dispatch a tool — the background service worker re-broadcasts
   these as `ANALYSIS_PROGRESS` messages with `kind: 'tool'` so the sidepanel

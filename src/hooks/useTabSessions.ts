@@ -57,13 +57,16 @@ function isEvaluatorSlot(name: string): name is keyof PartialEvaluatorResults {
   return EVALUATOR_SLOTS.has(name as keyof PartialEvaluatorResults)
 }
 
+// 'blocked' — the evaluator was skipped because an upstream dependency failed.
+export type EvaluatorProgressStatus = 'pending' | 'running' | 'completed' | 'error' | 'blocked'
+
 export interface EvaluatorProgress {
-  job_fit: 'pending' | 'running' | 'completed' | 'error'
-  salary: 'pending' | 'running' | 'completed' | 'error'
-  preference: 'pending' | 'running' | 'completed' | 'error'
-  risk: 'pending' | 'running' | 'completed' | 'error'
-  growth: 'pending' | 'running' | 'completed' | 'error'
-  summary: 'pending' | 'running' | 'completed' | 'error'
+  job_fit: EvaluatorProgressStatus
+  salary: EvaluatorProgressStatus
+  preference: EvaluatorProgressStatus
+  risk: EvaluatorProgressStatus
+  growth: EvaluatorProgressStatus
+  summary: EvaluatorProgressStatus
 }
 
 // Per-evaluator results streamed in as each finishes, independent of the
@@ -692,6 +695,7 @@ export function useTabSessions(
   const runLocalAnalysis = useCallback(async (
     tabId: number,
     extractedJob: ExtractedJob,
+    priorResults?: Partial<AggregatedReport['evaluators']>,
   ): Promise<AggregatedReport | null> => {
     localAnalysisControllersRef.current.get(tabId)?.abort(
       new DOMException('New analysis started', 'AbortError'),
@@ -699,7 +703,7 @@ export function useTabSessions(
     const controller = new AbortController()
     localAnalysisControllersRef.current.set(tabId, controller)
 
-    const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error') => {
+    const onProgress = (evaluator: string, status: EvaluatorProgressStatus) => {
       const session = sessionsRef.current.get(tabId)
       // Skip if no session exists — don't spawn a default one for a late
       // callback (e.g. fired after reset). updateSessionAndRender would
@@ -755,7 +759,7 @@ export function useTabSessions(
     }
 
     try {
-      const result = await runAnalysis(extractedJob, controller.signal, onProgress, onToolCall, onResult)
+      const result = await runAnalysis(extractedJob, controller.signal, onProgress, onToolCall, onResult, priorResults)
       if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
       if (cancelledRef.current.has(tabId)) return null
       if (result.ok) {
@@ -787,6 +791,7 @@ export function useTabSessions(
   const runRemoteAnalysis = useCallback(async (
     tabId: number,
     extractedJob: ExtractedJob,
+    priorResults?: Partial<AggregatedReport['evaluators']>,
   ): Promise<AggregatedReport | null> => {
     localAnalysisControllersRef.current.get(tabId)?.abort(
       new DOMException('New analysis started', 'AbortError'),
@@ -798,7 +803,7 @@ export function useTabSessions(
       const response = await chrome.runtime.sendMessage({
         type: 'ANALYZE_JD',
         tabId,
-        payload: { job: extractedJob },
+        payload: { job: extractedJob, priorResults },
       })
 
       if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
@@ -877,6 +882,49 @@ export function useTabSessions(
     }
 
     return run
+  }, [updateSessionAndRender, persistSession, runLocalAnalysis, runRemoteAnalysis])
+
+  // Resume a partially-failed analysis. Reuses the evaluators that succeeded
+  // and re-runs only the failed ones + everything depending on them (the runner
+  // re-derives the dependency cascade from which results it's handed). Keeps the
+  // existing report visible underneath until the re-run lands.
+  const continueAnalysis = useCallback(async (): Promise<AggregatedReport | null> => {
+    const tabId = activeTabIdRef.current
+    if (!tabId) return null
+    const session = sessionsRef.current.get(tabId)
+    if (!session?.job || !session.report) return null
+
+    const prior: Partial<AggregatedReport['evaluators']> = {}
+    const nextProgress: EvaluatorProgress = { ...INITIAL_PROGRESS }
+    const nextResults: PartialEvaluatorResults = {}
+    for (const [name, status] of Object.entries(session.report.evaluators)) {
+      const slot = name as keyof AggregatedReport['evaluators']
+      if (status.status === 'fulfilled') {
+        prior[slot] = status as never
+        nextProgress[slot] = 'completed'
+        if (status.result !== undefined) nextResults[slot] = status.result as never
+      }
+      // Failed / blocked evaluators stay 'pending' — they'll re-run. Summary
+      // also re-runs (it depends on all 5), so leave its progress 'pending'.
+    }
+
+    cancelledRef.current.delete(tabId)
+    updateSessionAndRender(tabId, {
+      status: 'analyzing',
+      error: null,
+      progress: nextProgress,
+      activity: {},
+      evaluatorResults: nextResults,
+    })
+    try {
+      await persistSession(tabId)
+    } catch (e) {
+      console.error('[Job Bro] Failed to persist resume state:', e)
+    }
+
+    return backendRef.current === 'chrome-prompt'
+      ? runLocalAnalysis(tabId, session.job, prior)
+      : runRemoteAnalysis(tabId, session.job, prior)
   }, [updateSessionAndRender, persistSession, runLocalAnalysis, runRemoteAnalysis])
 
   const stop = useCallback(() => {
@@ -1174,6 +1222,7 @@ export function useTabSessions(
     evaluatorResults: current.evaluatorResults,
     extract,
     analyze,
+    continueAnalysis,
     stop,
     reset,
     // Q&A

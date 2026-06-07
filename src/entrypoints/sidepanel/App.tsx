@@ -16,6 +16,12 @@ import { useProfile } from '@/hooks/useProfile'
 import { useTabSessions } from '@/hooks/useTabSessions'
 import { saveAnalysis } from '@/lib/db'
 import { formatAnalysisContext } from '@/lib/analysis-context'
+import type { AggregatedReport } from '@/types/evaluation'
+
+// Only persist a fully-successful analysis to history. A partial run (some
+// evaluator failed/blocked) stays live so the user can Continue and re-run it.
+const isCompleteReport = (r: AggregatedReport) =>
+  Object.values(r.evaluators).every((e) => e.status === 'fulfilled')
 
 // Global views not tied to any specific tab
 type GlobalView =
@@ -58,6 +64,7 @@ export default function App() {
     progress,
     extract,
     analyze,
+    continueAnalysis,
     stop,
     reset,
     qnaHistory,
@@ -90,7 +97,7 @@ export default function App() {
   const handleAnalyze = useCallback(async () => {
     if (!job) return
     const result = await analyze(job)
-    if (result) {
+    if (result && isCompleteReport(result)) {
       await saveAnalysis(job, result)
     }
   }, [job, analyze])
@@ -99,10 +106,17 @@ export default function App() {
     const extractedJob = await extract()
     if (!extractedJob) return
     const result = await analyze(extractedJob)
-    if (result) {
+    if (result && isCompleteReport(result)) {
       await saveAnalysis(extractedJob, result)
     }
   }, [extract, analyze])
+
+  const handleContinueAnalysis = useCallback(async () => {
+    const result = await continueAnalysis()
+    if (result && isCompleteReport(result)) {
+      await saveAnalysis(result.job, result)
+    }
+  }, [continueAnalysis])
 
   const handleGenerateResume = useCallback(async () => {
     if (!job) return
@@ -436,6 +450,7 @@ export default function App() {
             onSetChatLoading={setChatLoading}
             onBumpChatNonce={bumpChatNonce}
             onDeleteChatTurn={deleteChatTurn}
+            onContinue={handleContinueAnalysis}
           />
         )}
 

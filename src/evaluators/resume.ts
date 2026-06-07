@@ -87,7 +87,7 @@ export async function runResumeGenerator(
     messages.push({ role: 'system', content: customPrompt })
   }
   messages.push({ role: 'system', content: SYSTEM_PROMPT })
-  messages.push({ role: 'system', content: parts.join('\n\n') })
+  messages.push({ role: 'user', content: parts.join('\n\n') })
   previousResume = previousResume && previousResume.trim()
   if (previousResume) {
     messages.push({ role: 'user', content: `<previous_version>\n${previousResume}\n</previous_version>` })

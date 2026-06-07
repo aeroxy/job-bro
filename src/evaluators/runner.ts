@@ -30,7 +30,7 @@ export type EvaluatorName = 'job_fit' | 'salary' | 'preference' | 'risk' | 'grow
 // hook uses a wider type that also includes 'pending' (the initial state
 // before 'running'), but the runner only transitions 'running' -> 'completed'|
 // 'error' so the orchestrator can stay narrow.
-type ProgressCallback = (evaluator: string, status: 'running' | 'completed' | 'error') => void
+type ProgressCallback = (evaluator: string, status: 'running' | 'completed' | 'error' | 'blocked') => void
 type ToolCallCallback = (evaluator: string, call: ToolCall) => void
 // Streamed per-evaluator result. Fires once, right after the 'completed'
 // status, so the sidepanel can populate each card body as soon as that
@@ -127,7 +127,11 @@ export async function runAllEvaluators(
   onProgress?: ProgressCallback,
   onToolCall?: ToolCallCallback,
   signal?: AbortSignal,
-  onEvaluatorResult?: EvaluatorResultCallback
+  onEvaluatorResult?: EvaluatorResultCallback,
+  // Resume support: fulfilled results from a previous run, keyed by evaluator.
+  // Reused as-is instead of re-running, so a "Continue" only re-runs the
+  // failed evaluators + everything that depends on them.
+  priorResults?: Partial<AggregatedReport['evaluators']>,
 ): Promise<AggregatedReport> {
   const jobMarkdown = jobToMarkdown(job)
   // Tools are resolved per evaluator (see TOOL_EVALUATORS); resolveSchema then
@@ -154,63 +158,98 @@ export async function runAllEvaluators(
   // growth) reuses pages already fetched upstream for free.
   const exec = createCachedExecutor()
 
-  // This call goes out first to generate KV cache for the LLM
-  const preference = await runWithTracking<PreferenceResult>('preference', () =>
-    runPreferenceEvaluator(jobMarkdown, profile, config, customPrompt, preferenceTools, forEvaluator('preference'), signal, preferenceSchema, exec)
-    , onProgress, onEvaluatorResult)
+  // --- Fail-fast staged execution with resume -------------------------------
+  // Each evaluator runs only once its hard dependencies have *fulfilled*. If a
+  // dependency failed (or was itself blocked), the evaluator is marked
+  // 'blocked' and never runs — the pipeline stops along that branch instead of
+  // degrading to a JD-only fallback. `priorResults` lets a "Continue" re-run
+  // reuse the successes and re-run only the failed evaluators + their dependents.
+  const results: Partial<Record<EvaluatorName, EvaluatorStatus<unknown>>> = {}
+  const ok = (name: EvaluatorName) => results[name]?.status === 'fulfilled'
 
-  const [jobFit, salary] = await Promise.all([
-    runWithTracking<JobFitResult>('job_fit', () =>
-      runJobFitEvaluator(jobMarkdown, profile, config, customPrompt, jobFitTools, forEvaluator('job_fit'), signal, jobFitSchema, exec)
-      , onProgress, onEvaluatorResult),
-    runWithTracking<SalaryResult>('salary', () =>
-      runSalaryEvaluator(jobMarkdown, profile, config, customPrompt, salaryTools, forEvaluator('salary'), signal, salarySchema, exec)
-      , onProgress, onEvaluatorResult),
+  // Reuse a prior fulfilled result; else block when a dependency isn't
+  // fulfilled; else run. Never throws (runWithTracking captures failures as a
+  // 'rejected' status), so the parallel stages below settle in full — an
+  // in-flight sibling isn't aborted just because its partner failed.
+  async function stageRun<T>(name: EvaluatorName, deps: EvaluatorName[], fn: () => Promise<T>): Promise<void> {
+    const prior = priorResults?.[name as keyof AggregatedReport['evaluators']]
+    if (prior?.status === 'fulfilled') {
+      results[name] = prior as EvaluatorStatus<unknown>
+      onProgress?.(name, 'completed')
+      onEvaluatorResult?.(name, prior.result)
+      return
+    }
+    if (!deps.every(ok)) {
+      results[name] = { status: 'blocked' }
+      onProgress?.(name, 'blocked')
+      return
+    }
+    results[name] = await runWithTracking<T>(name, fn, onProgress, onEvaluatorResult)
+  }
+
+  // Stage 1 — preference goes first to warm the LLM's KV cache (its evidence
+  // also seeds the downstream prior-research pool). No dependencies.
+  await stageRun('preference', [], () =>
+    runPreferenceEvaluator(jobMarkdown, profile, config, customPrompt, preferenceTools, forEvaluator('preference'), signal, preferenceSchema, exec))
+
+  // Stage 2 — independent researchers, concurrent.
+  await Promise.all([
+    stageRun('job_fit', [], () =>
+      runJobFitEvaluator(jobMarkdown, profile, config, customPrompt, jobFitTools, forEvaluator('job_fit'), signal, jobFitSchema, exec)),
+    stageRun('salary', [], () =>
+      runSalaryEvaluator(jobMarkdown, profile, config, customPrompt, salaryTools, forEvaluator('salary'), signal, salarySchema, exec)),
   ])
 
-  // Pipe the upstream conclusions into the downstream stage. Either may be
-  // undefined if its evaluator failed — risk/growth fall back to deriving from
-  // the JD alone (preserves the error isolation runWithTracking provides).
-  const jobFitResult = jobFit.status === 'fulfilled' ? jobFit.result : undefined
-  const salaryResult = salary.status === 'fulfilled' ? salary.result : undefined
-  const preferenceResult = preference.status === 'fulfilled' ? preference.result : undefined
+  // Conclusions piped into the downstream stage. Guaranteed defined when the
+  // dependent evaluator actually runs (stageRun blocks it otherwise).
+  const preferenceResult = ok('preference') ? results.preference!.result as PreferenceResult : undefined
+  const jobFitResult = ok('job_fit') ? results.job_fit!.result as JobFitResult : undefined
+  const salaryResult = ok('salary') ? results.salary!.result as SalaryResult : undefined
 
-  // Sources the upstream stage already found, deduped — handed to the
-  // downstream stage so risk/growth inherit the research instead of redoing it.
+  // Sources the upstream stage already found, deduped — handed downstream so
+  // risk/growth inherit the research instead of redoing it.
   const priorResearch = poolEvidence(preferenceResult, jobFitResult, salaryResult)
 
-  const [risk, growth] = await Promise.all([
-    runWithTracking<RiskResult>('risk', () =>
-      runRiskEvaluator(jobMarkdown, profile, config, customPrompt, riskTools, forEvaluator('risk'), signal, riskSchema, { jobFit: jobFitResult, salary: salaryResult }, priorResearch, exec)
-      , onProgress, onEvaluatorResult),
-    runWithTracking<GrowthResult>('growth', () =>
-      runGrowthEvaluator(jobMarkdown, profile, config, customPrompt, growthTools, forEvaluator('growth'), signal, growthSchema, jobFitResult, priorResearch, exec)
-      , onProgress, onEvaluatorResult),
+  // Stage 3 — synthesizers. risk needs job_fit + salary; growth needs job_fit.
+  await Promise.all([
+    stageRun('risk', ['job_fit', 'salary'], () =>
+      runRiskEvaluator(jobMarkdown, profile, config, customPrompt, riskTools, forEvaluator('risk'), signal, riskSchema, { jobFit: jobFitResult, salary: salaryResult }, priorResearch, exec)),
+    stageRun('growth', ['job_fit'], () =>
+      runGrowthEvaluator(jobMarkdown, profile, config, customPrompt, growthTools, forEvaluator('growth'), signal, growthSchema, jobFitResult, priorResearch, exec)),
   ])
 
-  const evaluators = { job_fit: jobFit, salary, preference, risk, growth }
+  const evaluators = {
+    job_fit: (results.job_fit ?? { status: 'blocked' }) as EvaluatorStatus<JobFitResult>,
+    salary: (results.salary ?? { status: 'blocked' }) as EvaluatorStatus<SalaryResult>,
+    preference: (results.preference ?? { status: 'blocked' }) as EvaluatorStatus<PreferenceResult>,
+    risk: (results.risk ?? { status: 'blocked' }) as EvaluatorStatus<RiskResult>,
+    growth: (results.growth ?? { status: 'blocked' }) as EvaluatorStatus<GrowthResult>,
+  }
 
-  // Summary runs after — it depends on all evaluator results. It synthesizes
-  // what the evaluators already gathered, so it runs tool-free (summaryTools is
-  // empty), which also lets it use the strict structured-output path.
   const score = getScore(evaluators)
   const verdict = getVerdict(score, evaluators)
 
-  // The summary must not be a single point of failure: the 5 evaluators above
-  // may have already succeeded, so a summary error should still yield a report
-  // with their cards intact. Cancellation (AbortError) still propagates.
+  // Stage 4 — summary. It synthesizes all 5 results, so it depends on all of
+  // them: if any failed/blocked, summary is blocked too and the report returns
+  // with whatever cards succeeded (reasoning falls back to buildReasoning).
+  if (!(ok('job_fit') && ok('salary') && ok('preference') && ok('risk') && ok('growth'))) {
+    onProgress?.('summary', 'blocked')
+    return aggregate(job, evaluators)
+  }
+
+  // Summary runs tool-free (summaryTools is empty), which also lets it use the
+  // strict structured-output path. Cancellation (AbortError) propagates; any
+  // other failure is surfaced (fail-fast) so the UI can offer a Continue.
   onProgress?.('summary', 'running')
-  let summary: { job_summary: string; reasoning: string }
   try {
-    summary = await runSummaryEvaluator(jobMarkdown, evaluators, score, verdict, config, customPrompt, summaryTools, forEvaluator('summary'), signal, summarySchema, exec)
+    const summary = await runSummaryEvaluator(jobMarkdown, evaluators, score, verdict, config, customPrompt, summaryTools, forEvaluator('summary'), signal, summarySchema, exec)
     onProgress?.('summary', 'completed')
     onEvaluatorResult?.('summary', summary)
+    return aggregate(job, evaluators, summary.reasoning, summary.job_summary)
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
     console.error('[evaluator:summary] failed:', e)
     onProgress?.('summary', 'error')
-    summary = { job_summary: '', reasoning: 'Summary generation failed.' }
+    return aggregate(job, evaluators)
   }
-
-  return aggregate(job, evaluators, summary.reasoning, summary.job_summary)
 }
