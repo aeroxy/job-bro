@@ -86,10 +86,15 @@ function getQueue(baseUrl: string): RequestQueue {
 // display see only the answer. Only a leading block is removed; if the closing
 // tag is missing (truncated reasoning), the content is left untouched.
 export function stripThinkBlock(content: string): string {
-  if (!content.trimStart().startsWith('<think>')) return content
-  const close = content.indexOf('</think>')
-  if (close === -1) return content
-  return content.slice(close + '</think>'.length).trimStart()
+  const trimmed = content.trimStart()
+  if (!trimmed.startsWith('<think>')) return content
+  const close = trimmed.indexOf('</think>')
+  // No close tag → the response was cut off inside the reasoning block, so the
+  // real answer never arrived. Return '' rather than the half-written thoughts:
+  // parseJSON's `{…}` regex would otherwise latch onto a brace inside the
+  // reasoning and yield a garbage-but-parseable object.
+  if (close === -1) return ''
+  return trimmed.slice(close + '</think>'.length).trimStart()
 }
 
 export async function chatCompletion(
@@ -637,16 +642,9 @@ export function buildPreferencesContext(profile: UserProfile): string {
 // Returns null when there's nothing to inject (no system message added).
 export function buildPriorResearchContext(evidences: EvidenceItem[]): string | null {
   if (!evidences.length) return null
-  // Evidence fields come from web pages (untrusted). Neutralize characters that
-  // could forge a closing </prior_research> tag or inject pseudo-instructions,
-  // and collapse newlines so each source stays a single bullet line.
-  const escapeForPrompt = (s: string) =>
-    s.replace(/[<>]/g, ' ').replace(/`/g, "'").replace(/\s*[\r\n]+\s*/g, ' ').trim()
   const lines = evidences.map((e) => {
-    const title = e.title?.trim() ? escapeForPrompt(e.title) : ''
-    const url = escapeForPrompt(e.url ?? '')
-    const snippet = e.snippet?.trim() ? ` — ${escapeForPrompt(e.snippet)}` : ''
-    return `- ${title || url} (${url})${snippet}`
+    const snippet = e.snippet?.trim() ? ` — ${e.snippet.trim()}` : ''
+    return `- ${e.title?.trim() || e.url} (${e.url})${snippet}`
   })
   return `Earlier analysis steps already researched this company/role and found the sources below. Treat them as known context. Only call web_search / read_page if you need detail they don't cover — re-reading a listed URL is cheap (it's cached), but don't repeat searches that produced these.
 

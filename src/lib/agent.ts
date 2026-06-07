@@ -13,7 +13,10 @@ import type { LLMConfig } from '@/types/profile'
 import type { ToolCall, ToolDefinition } from './tools/types'
 import { webSearch, readPage } from './tools/handlers'
 
-export const MAX_AGENT_ITERATIONS = 8
+// 3 tool-use rounds, then the model must produce a final answer. Empirically,
+// a run that hasn't converged in 3 rounds won't converge in 8 — so the higher
+// cap just burns tokens/latency on a doomed run before failing anyway.
+export const MAX_AGENT_ITERATIONS = 3
 
 export type ToolExecutor = (call: ToolCall, signal?: AbortSignal) => Promise<string>
 

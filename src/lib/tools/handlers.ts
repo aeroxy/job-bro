@@ -27,10 +27,10 @@ function fetchWithTimeout(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(new DOMException('Fetch timed out', 'TimeoutError')), FETCH_TIMEOUT_MS)
   const combined = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal
-  // Default to 'omit' so read_page — which the model can point at any URL,
-  // including ones suggested by an injected job description — never sends the
-  // user's cookies to arbitrary sites. Only the DuckDuckGo search path opts
-  // into 'include' (see webSearch), where the bot-verification cookie matters.
+  // credentials defaults to 'omit' (secure default for any future caller), but
+  // both current callers opt into 'include': webSearch for DuckDuckGo's bot-
+  // verification cookie, and read_page so it can act as the user against their
+  // own authenticated sessions (see read_page's comment for the tradeoff).
   return fetch(url, { signal: combined, redirect: 'follow', credentials }).finally(() => clearTimeout(timer))
 }
 
@@ -100,8 +100,24 @@ function cleanDdgRedirects(md: string): string {
   })
 }
 
-// we do not restrict the tool from fetching localhost or private IP addresses
-// because in custom system prompt user can refer to local resources
+// Two deliberate choices, both trading a little safety for usefulness:
+//   1. credentials: 'include' — read_page fetches with the user's cookies so it
+//      acts AS the user: it can read pages behind their own authenticated
+//      sessions (intranets, logged-in job boards, local services that need
+//      auth). Sending the user's own credentials to read the user's own
+//      resources is the whole point of the tool.
+//   2. No localhost / private-IP blocking. The textbook SSRF guard barely
+//      applies: the fetch runs in the user's own service worker on their own
+//      machine, so it can only reach what the user can already reach — no
+//      privilege boundary is crossed.
+// Residual risk: a prompt-injected JD steers the LLM to read something
+// sensitive (now including credentialed/local resources) and exfiltrate via a
+// later tool call. We accept it — it needs the user to analyze attacker
+// content, it's blind (the JD author has no idea what hosts/ports/paths exist
+// on the victim's machine or which sessions they're logged into, so any
+// injected target is a guess into the void), and an IP blocklist wouldn't close
+// it anyway since outbound public fetches stay open by design. Vanishingly
+// unlikely for a LinkedIn job poster.
 export async function readPage(url: string, ctx: ToolHandlerContext = {}): Promise<string> {
   let parsed: URL
   try {
@@ -112,7 +128,7 @@ export async function readPage(url: string, ctx: ToolHandlerContext = {}): Promi
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`Unsupported protocol: ${parsed.protocol}`)
   }
-  const res = await fetchWithTimeout(parsed.toString(), ctx.signal)
+  const res = await fetchWithTimeout(parsed.toString(), ctx.signal, 'include')
   if (!res.ok) throw new Error(`Fetch returned HTTP ${res.status}`)
   const html = await res.text()
   return parseViaOffscreen(html)

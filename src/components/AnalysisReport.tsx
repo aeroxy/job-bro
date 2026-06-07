@@ -81,8 +81,8 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
   // report has a result yet. That gap is normally tiny (status and result
   // messages are sent back-to-back) but it can be visible if messages
   // arrive out of order or during the first-frame race.
-  const waitingFor = (status: EvaluatorStatus<unknown>, partial: unknown) =>
-    !report?.evaluators
+  const waitingFor = (status: EvaluatorStatus<unknown> | undefined, partial: unknown) =>
+    !status
       ? !partial
       : status.status !== 'fulfilled' || (!status.result && !partial)
 
