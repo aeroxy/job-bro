@@ -79,9 +79,12 @@ export async function webSearch(query: string, ctx: ToolHandlerContext = {}): Pr
 // decode straight to the target; ad results decode to a duckduckgo.com/y.js
 // redirect (real target double-encoded in `u3`) — we drop those.
 function cleanDdgRedirects(md: string): string {
-  return md.replace(/\/\/duckduckgo\.com\/l\/\?[^\s)]+/g, (match) => {
+  return md.replace(/(?:https?:)?\/\/duckduckgo\.com\/l\/\?[^\s)]+/g, (match) => {
     try {
-      const target = new URL('https:' + match).searchParams.get('uddg')
+      // Protocol-relative hrefs (`//duckduckgo.com/...`) need a scheme prepended;
+      // absolute ones (`https://...`) must not, or we'd get `https:https://…`.
+      const urlString = match.startsWith('//') ? 'https:' + match : match
+      const target = new URL(urlString).searchParams.get('uddg')
       if (!target) return match
       const targetUrl = new URL(target)
       // Ad redirect: duckduckgo.com/y.js with the real target double-encoded

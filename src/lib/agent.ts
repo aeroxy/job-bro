@@ -161,7 +161,6 @@ export async function runAgent(
         } catch (e) {
           result = `Error: ${(e as Error).message}`
         }
-        console.log(`[Tool Call] name: ${call.function.name}, arguments: ${call.function.arguments}`, result)
         return {
           role: 'tool' as const,
           tool_call_id: call.id,
