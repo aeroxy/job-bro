@@ -240,7 +240,7 @@ Every evaluator runs through the **agent loop** in `src/lib/agent.ts`. The loop 
    - Append the assistant message
    - For each call: invoke `executeTool(call, signal)`, append a `tool` role message with the result
 3. Else: return the content
-4. Cap at `MAX_AGENT_ITERATIONS = 8` iterations
+4. Cap at MAX_AGENT_ITERATIONS = 3 iterations
 
 For the Chrome AI backend (Gemini Nano), tools aren't supported natively — the request goes through without `tools`, the response has no `tool_calls`, and the loop terminates after one iteration. Behavior matches the pre-agent path.
 
