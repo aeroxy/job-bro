@@ -164,7 +164,7 @@ function collectRisks(evaluators: EvaluatorResults): string[] {
 
   if (evaluators.risk.status === 'fulfilled' && evaluators.risk.result) {
     for (const flag of (evaluators.risk.result.flags ?? [])) {
-      if (flag.severity !== 'low') {
+      if (flag && flag.severity !== 'low') {
         risks.push(`${flag.type.replace(/_/g, ' ')}: ${flag.description}`)
       }
     }

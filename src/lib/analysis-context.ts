@@ -17,7 +17,7 @@ export function formatAnalysisContext(report: AggregatedReport): string {
   if (risk) {
     lines.push(`Risk: ${risk.overall_risk} — ${risk.summary}`)
     for (const f of risk.flags ?? []) {
-      if (f.severity !== 'low') lines.push(`  Risk flag (${f.severity}): ${f.description}`)
+      if (f && f.severity !== 'low') lines.push(`  Risk flag (${f.severity}): ${f.description}`)
     }
   }
 
