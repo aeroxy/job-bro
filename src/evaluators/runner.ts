@@ -44,8 +44,8 @@ function poolEvidence(...results: Array<{ evidences?: EvidenceItem[] } | undefin
   const byUrl = new Map<string, EvidenceItem>()
   for (const r of results) {
     for (const ev of r?.evidences ?? []) {
-      // url comes from untrusted LLM output — may be missing or non-string.
-      if (typeof ev?.url !== 'string') continue
+      // url comes from untrusted LLM output — may be missing, non-string, or blank.
+      if (typeof ev?.url !== 'string' || !ev.url.trim()) continue
       const key = ev.url.split('#')[0]!.split('?')[0]!.toLowerCase()
       if (!byUrl.has(key)) byUrl.set(key, ev)
     }
@@ -66,14 +66,15 @@ async function runWithTracking<T>(
     onEvaluatorResult?.(name, result)
     return { status: 'fulfilled', result }
   } catch (e) {
-    const err = e as Error
+    const errorMessage = e instanceof Error ? e.message : String(e)
+    const errorName = e instanceof Error ? e.name : ''
     // AbortError is expected — the user stopped the analysis or the tab closed.
     // It's a cancellation, not a failure, so don't surface it as an error.
-    if (err.name !== 'AbortError') {
+    if (errorName !== 'AbortError') {
       console.error(`[evaluator:${name}] failed:`, e)
     }
     onProgress?.(name, 'error')
-    return { status: 'rejected', error: err.message }
+    return { status: 'rejected', error: errorMessage }
   }
 }
 
