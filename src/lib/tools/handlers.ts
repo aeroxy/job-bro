@@ -100,6 +100,8 @@ function cleanDdgRedirects(md: string): string {
   })
 }
 
+// we do not restrict the tool from fetching localhost or private IP addresses
+// because in custom system prompt user can refer to local resources
 export async function readPage(url: string, ctx: ToolHandlerContext = {}): Promise<string> {
   let parsed: URL
   try {

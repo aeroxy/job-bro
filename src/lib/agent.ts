@@ -39,9 +39,9 @@ export const executeTool: ToolExecutor = async (call, signal) => {
   let args: Record<string, unknown>
   try {
     args = JSON.parse(call.function.arguments)
-    // JSON.parse succeeds on `"null"`, `"42"`, etc.; guard so the property
-    // access below can't throw a TypeError on a non-object.
-    if (!args || typeof args !== 'object') throw new Error('not an object')
+    // JSON.parse succeeds on `"null"`, `"42"`, `"[]"`, etc.; guard so the
+    // property access below can't be a non-object (typeof [] is 'object' too).
+    if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('not an object')
   } catch {
     throw new Error(`Tool ${call.function.name} received malformed arguments`)
   }
@@ -68,9 +68,9 @@ function toolCacheKey(call: ToolCall): string | null {
   let args: Record<string, unknown>
   try {
     args = JSON.parse(call.function.arguments)
-    // JSON.parse succeeds on `"null"`, `"42"`, etc.; guard so the property
-    // access below can't throw a TypeError on a non-object (matches executeTool).
-    if (!args || typeof args !== 'object') return null
+    // JSON.parse succeeds on `"null"`, `"42"`, `"[]"`, etc.; guard so the
+    // property access below can't be a non-object (matches executeTool).
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return null
   } catch {
     return null
   }
@@ -159,7 +159,7 @@ export async function runAgent(
         try {
           result = await executeTool(call, signal)
         } catch (e) {
-          result = `Error: ${(e as Error).message}`
+          result = `Error: ${e instanceof Error ? e.message : String(e)}`
         }
         return {
           role: 'tool' as const,
