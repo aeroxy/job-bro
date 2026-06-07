@@ -1207,6 +1207,22 @@ export function useTabSessions(
     }
   }, [syncTab])
 
+  // Manual re-sync of the active tab. The syncTab fast-path skips reloading
+  // when hydratedJobId already matches the URL's job, so a run that finished
+  // in the background after an empty hydration stays invisible until a tab
+  // switch. Clearing the guard forces syncTab to re-read from IDB. No-op while
+  // a run is in flight here — that state is already live and authoritative.
+  const refresh = useCallback(() => {
+    const tabId = activeTabIdRef.current
+    if (!tabId) return
+    const session = sessionsRef.current.get(tabId)
+    if (session?.status === 'analyzing' || session?.status === 'extracting') return
+    if (session) {
+      sessionsRef.current.set(tabId, { ...session, hydratedJobId: null })
+    }
+    syncTab(tabId)
+  }, [syncTab])
+
   // Current session for the active tab
   const current = activeTabId ? getSession(activeTabId) : DEFAULT_SESSION
 
@@ -1246,5 +1262,6 @@ export function useTabSessions(
     resetResume,
     // Session management
     invalidateHydration,
+    refresh,
   }
 }

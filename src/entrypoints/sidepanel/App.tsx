@@ -81,6 +81,7 @@ export default function App() {
     setResumeMarkdown,
     resetResume,
     invalidateHydration,
+    refresh,
     activity,
     evaluatorResults,
   } = useTabSessions(activeTabId, onTabRemoved, llmConfig)
@@ -228,6 +229,16 @@ export default function App() {
             <Settings className="size-3.5" />
           </Button>
         </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={refresh}
+          disabled={isWorking}
+          title="Refresh — reload this tab's analysis"
+          className="cursor-pointer"
+        >
+          <RefreshCw className="size-3.5" />
+        </Button>
       </header>
 
       {/* Content */}
