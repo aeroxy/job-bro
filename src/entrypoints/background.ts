@@ -20,9 +20,15 @@ let offscreenReady: Promise<void> | null = null
 // Service-worker-only: chrome.offscreen.createDocument is unavailable from
 // extension pages.
 async function ensureOffscreen(): Promise<void> {
-  if (offscreenReady) return offscreenReady
+  // Await any in-flight creation so concurrent callers don't race a second one.
+  if (offscreenReady) {
+    try { await offscreenReady } catch { offscreenReady = null }
+  }
+  // Verify liveness on every call — Chrome can tear down the offscreen document
+  // independently, and a cached resolved promise would otherwise mask that and
+  // leave callers messaging a document that no longer exists.
+  if (await hasOffscreenDocument()) return
   offscreenReady = (async () => {
-    if (await hasOffscreenDocument()) return
     try {
       await chrome.offscreen.createDocument({
         url: OFFSCREEN_URL,

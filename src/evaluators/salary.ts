@@ -63,8 +63,11 @@ export async function runSalaryEvaluator(
         const range = r.estimated_range as Record<string, unknown>
         if (typeof range.min !== 'number' || typeof range.max !== 'number')
           return '"estimated_range.min" and "max" must be numbers'
+        if (typeof range.currency !== 'string' || !range.currency.trim())
+          return '"estimated_range.currency" must be a non-empty string'
         if (!['below', 'within', 'above'].includes(r.expectation_alignment as string))
           return '"expectation_alignment" must be "below", "within", or "above"'
+        if (typeof r.risk_flag !== 'boolean') return '"risk_flag" must be a boolean'
         if (typeof r.reasoning !== 'string' || !r.reasoning.trim()) return '"reasoning" must be a non-empty string'
         if (r.evidences !== undefined && !Array.isArray(r.evidences)) return '"evidences" must be an array'
         return null

@@ -145,7 +145,7 @@ If the user has configured a custom system prompt, it will be the first system p
 - **Duplicate analysis (same job_id):** analyze() returns the existing in-flight
   promise. This prevents redundant API calls when the user clicks "Analyze" on
   multiple tabs viewing the same job.
-- **LLM validation failure:** `runWithValidation` retries once with the validation error in context.
+- **LLM validation failure:** `runAgentWithValidation` retries once with the validation error in context.
 - **HTTP errors:** Retried on 429/5xx with 1s → 3s delays.
 - **Extraction failure:** Content script returns `JD_EXTRACTION_FAILED`; sidepanel shows error state.
 - **Content script not injected:** Background catches scripting errors and returns extraction failure.

@@ -190,6 +190,11 @@ export async function chatCompletion(
         return stripThinkBlock(content)
       } catch (e) {
         clearTimeout(timeout)
+        if (isTransientNetworkError(e, signal) && attempt < 2) {
+          lastError = e instanceof Error ? e : new Error(String(e))
+          await delay(httpRetryDelays[attempt])
+          continue
+        }
         throw e instanceof Error ? e : new Error(String(e))
       }
     }
@@ -302,7 +307,7 @@ async function streamCompletion(
     let inactivityTimer: ReturnType<typeof setTimeout>
     const resetTimer = () => {
       clearTimeout(inactivityTimer)
-      inactivityTimer = setTimeout(() => controller.abort(), inactivityMs)
+      inactivityTimer = setTimeout(() => controller.abort(new DOMException('Stream timed out', 'TimeoutError')), inactivityMs)
     }
 
     try {
@@ -395,6 +400,11 @@ async function streamCompletion(
 
     } catch (e) {
       clearTimeout(inactivityTimer!)
+      if (isTransientNetworkError(e, signal) && attempt < 2) {
+        lastError = e instanceof Error ? e : new Error(String(e))
+        await delay(httpRetryDelays[attempt])
+        continue
+      }
       throw e instanceof Error ? e : new Error(String(e))
     }
   }
@@ -404,6 +414,16 @@ async function streamCompletion(
 
 function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+// fetch() rejects on a dropped connection with a TypeError, and our request
+// timeout aborts with a DOMException named 'TimeoutError'. Both are transient
+// and worth retrying. An external/user abort (signal.aborted) is deliberate, so
+// never retry that — nor the API/parse Errors we throw ourselves (plain Error).
+function isTransientNetworkError(e: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return false
+  if (e instanceof DOMException) return e.name === 'TimeoutError'
+  return e instanceof TypeError
 }
 
 // Tool-aware variant of chatCompletion. Returns the raw model message so the
@@ -555,6 +575,11 @@ async function toolCompletionRequest(
       }
     } catch (e) {
       clearTimeout(timer)
+      if (isTransientNetworkError(e, signal) && attempt < 2) {
+        lastError = e instanceof Error ? e : new Error(String(e))
+        await delay(httpRetryDelays[attempt])
+        continue
+      }
       throw e instanceof Error ? e : new Error(String(e))
     }
   }
@@ -612,9 +637,16 @@ export function buildPreferencesContext(profile: UserProfile): string {
 // Returns null when there's nothing to inject (no system message added).
 export function buildPriorResearchContext(evidences: EvidenceItem[]): string | null {
   if (!evidences.length) return null
+  // Evidence fields come from web pages (untrusted). Neutralize characters that
+  // could forge a closing </prior_research> tag or inject pseudo-instructions,
+  // and collapse newlines so each source stays a single bullet line.
+  const escapeForPrompt = (s: string) =>
+    s.replace(/[<>]/g, ' ').replace(/`/g, "'").replace(/\s*[\r\n]+\s*/g, ' ').trim()
   const lines = evidences.map((e) => {
-    const snippet = e.snippet?.trim() ? ` — ${e.snippet.trim()}` : ''
-    return `- ${e.title?.trim() || e.url} (${e.url})${snippet}`
+    const title = e.title?.trim() ? escapeForPrompt(e.title) : ''
+    const url = escapeForPrompt(e.url ?? '')
+    const snippet = e.snippet?.trim() ? ` — ${escapeForPrompt(e.snippet)}` : ''
+    return `- ${title || url} (${url})${snippet}`
   })
   return `Earlier analysis steps already researched this company/role and found the sources below. Treat them as known context. Only call web_search / read_page if you need detail they don't cover — re-reading a listed URL is cheap (it's cached), but don't repeat searches that produced these.
 

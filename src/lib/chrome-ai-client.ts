@@ -74,11 +74,13 @@ export interface SessionOptions {
 }
 
 export async function createChromeAiSession(opts: SessionOptions): Promise<string> {
-  const res = await sendOrThrow<{ sessionId: string }>({
+  // sendOrThrow wraps the offscreen reply in { result: ... }; the session id
+  // lives in `result`, not a top-level `sessionId` (which is always undefined).
+  const res = await sendOrThrow<{ result: string }>({
     type: 'CHROME_AI_SESSION_CREATE',
     ...opts,
   })
-  return res.sessionId
+  return res.result
 }
 
 export async function promptChromeAiSession(

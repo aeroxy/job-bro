@@ -27,7 +27,7 @@ export function useChromeAiStatus() {
 
   useEffect(() => {
     refresh()
-    // Subscribe to download-progress events broadcast from chrome-prompt-client.
+    // Subscribe to download-progress events broadcast from @/lib/chrome-ai-client.
     // Any session creation in the app forwards events here.
     const unsub = onChromeDownloadProgress((loaded) => {
       setState((prev) => {

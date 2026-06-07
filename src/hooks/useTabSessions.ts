@@ -618,6 +618,10 @@ export function useTabSessions(
         // analyze() sets 'analyzing' synchronously before dispatch, so the
         // fresh run's messages still pass.
         if (session.status !== 'analyzing') return
+        // Validate the evaluator name up front so a malformed/stale message
+        // can't write unknown keys into activity/progress (the 'tool' and
+        // 'status' branches index by it directly).
+        if (!isEvaluatorSlot(evaluator)) return
         const kind = message.payload.kind ?? 'status'
         if (kind === 'tool' && message.payload.tool) {
           const t = message.payload.tool

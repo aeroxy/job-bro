@@ -76,12 +76,7 @@ export async function runResumeGenerator(
     const qnaText = qnaHistory.map(t => `${t.role === 'user' ? 'Q' : 'A'}: ${t.content}`).join('\n\n')
     parts.push(`<qna>\n${qnaText}\n</qna>`)
   }
-  // if (previousResume) parts.push(`<previous_version>\n${previousResume}\n</previous_version>`)
-  // if (previousSummary) parts.push(`<context>\n${previousSummary}\n</context>`)
-  // if (comment) parts.push(`<feedback>\n${comment.trim()}\n</feedback>`)
-
   const messages: ChatMessage[] = []
-  // const messages = buildMessages(customPrompt, SYSTEM_PROMPT, parts.join('\n\n'))
   // Build the messages array with custom prompt and internal prompt as separate system entries
   if (customPrompt) {
     messages.push({ role: 'system', content: customPrompt })
@@ -121,5 +116,11 @@ export async function runResumeGenerator(
   ]
 
   const retryRaw = await chatCompletion(config, retryMessages, options)
-  return splitResumeOutput(retryRaw)
+  const retryResult = splitResumeOutput(retryRaw)
+  // Re-validate the retry too — otherwise a still-malformed { resume, summary }
+  // would slip through to callers. Throw on a second failure rather than
+  // returning a partial object.
+  const retryError = validate(retryResult)
+  if (retryError) throw new Error(`Resume generation failed after retry: ${retryError}`)
+  return retryResult
 }
