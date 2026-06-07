@@ -165,7 +165,11 @@ function collectRisks(evaluators: EvaluatorResults): string[] {
   if (evaluators.risk.status === 'fulfilled' && evaluators.risk.result) {
     for (const flag of (evaluators.risk.result.flags ?? [])) {
       if (flag && flag.severity !== 'low') {
-        risks.push(`${flag.type.replace(/_/g, ' ')}: ${flag.description}`)
+        // type/description are required by the type, but a no-structured-output
+        // LLM can omit them — guard the .replace so one malformed flag can't
+        // throw and crash the whole aggregation.
+        const label = typeof flag.type === 'string' ? flag.type.replace(/_/g, ' ') : 'risk'
+        risks.push(`${label}: ${flag.description ?? ''}`)
       }
     }
   }
