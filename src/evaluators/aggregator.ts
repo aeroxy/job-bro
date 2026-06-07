@@ -35,9 +35,12 @@ function collectReferences(evaluators: EvaluatorResults): EvidenceItem[] {
         existing.cited_by = Array.from(new Set([...(existing.cited_by ?? []), name]))
       } else {
         byUrl.set(key, {
-          title: ev.title ?? ev.url,
+          // title/snippet are untrusted LLM output — coerce to safe strings so
+          // a non-string (object/array) can't reach React as a child and crash
+          // the report render ("Objects are not valid as a React child").
+          title: typeof ev.title === 'string' && ev.title.trim() ? ev.title : ev.url,
           url: ev.url,
-          snippet: ev.snippet,
+          snippet: typeof ev.snippet === 'string' ? ev.snippet : undefined,
           cited_by: [name],
         })
       }
