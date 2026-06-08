@@ -1,6 +1,7 @@
 import { runAnalysis, runChat, runResume } from '@/lib/llm-handlers'
 import type { EvaluatorResultCallback, ToolCallCallback } from '@/lib/llm-handlers'
 import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
+import { getSessionByJobId, saveSession } from '@/lib/db'
 
 // Runs on every service-worker startup — confirms which build is live so a
 // stale (un-reloaded) worker is immediately obvious in the console.
@@ -139,16 +140,39 @@ export default defineBackground(() => {
         }
         const controller = new AbortController()
         analysisControllers.set(tabId, controller)
-        handleAnalyzeJD(message.payload.job, controller.signal, tabId, message.payload.priorResults).then((result) => {
+        const job = message.payload.job
+        handleAnalyzeJD(job, controller.signal, tabId, message.payload.priorResults).then(async (result) => {
           if (analysisControllers.get(tabId) === controller) {
             analysisControllers.delete(tabId)
           }
+          // Persist to IDB and broadcast so the sidepanel gets the result even
+          // if the service worker dies before sendResponse reaches it.
+          const ok = result.type === 'ANALYSIS_RESULT'
+          const report = ok ? (result as any).payload : undefined
+          const analysisError = !ok ? (result as any).error : undefined
+          if (ok && report && job.job_id) {
+            try {
+              const existing = await getSessionByJobId(job.job_id)
+              if (existing) {
+                await saveSession({ ...existing, report, updatedAt: Date.now(), status: 'done' })
+              }
+            } catch { /* best-effort persist */ }
+          }
+          chrome.runtime.sendMessage({
+            type: 'ANALYSIS_COMPLETE',
+            payload: { tabId, ok, ...(ok ? { report } : { error: analysisError }) },
+          }).catch(() => {})
           sendResponse(result)
-        }).catch((e) => {
+        }).catch(async (e) => {
           if (analysisControllers.get(tabId) === controller) {
             analysisControllers.delete(tabId)
           }
-          sendResponse({ type: 'ANALYSIS_ERROR', error: (e as Error).message })
+          const error = (e as Error).message
+          chrome.runtime.sendMessage({
+            type: 'ANALYSIS_COMPLETE',
+            payload: { tabId, ok: false, error },
+          }).catch(() => {})
+          sendResponse({ type: 'ANALYSIS_ERROR', error })
         })
         return true
       }
@@ -161,24 +185,55 @@ export default defineBackground(() => {
         }
         const controller = new AbortController()
         resumeControllers.set(tabId, controller)
+        const resumeJob = message.payload.job
         handleGenerateResume(
-          message.payload.job,
+          resumeJob,
           controller.signal,
           message.payload.analysisContext,
           message.payload.previousResume,
           message.payload.previousSummary,
           message.payload.comment,
           message.payload.qnaHistory
-        ).then((result) => {
+        ).then(async (result) => {
           if (resumeControllers.get(tabId) === controller) {
             resumeControllers.delete(tabId)
           }
+          const ok = result.type === 'RESUME_RESULT'
+          const payload = ok ? (result as any).payload : undefined
+          const resumeError = !ok ? (result as any).error : undefined
+          if (ok && payload && resumeJob.job_id) {
+            try {
+              const existing = await getSessionByJobId(resumeJob.job_id)
+              if (existing) {
+                await saveSession({
+                  ...existing,
+                  resumeMarkdown: payload.markdown,
+                  resumeSummary: payload.summary,
+                  updatedAt: Date.now(),
+                })
+              }
+            } catch { /* best-effort persist */ }
+          }
+          chrome.runtime.sendMessage({
+            type: 'RESUME_COMPLETE',
+            payload: {
+              tabId, ok,
+              ...(ok
+                ? { markdown: payload.markdown, summary: payload.summary }
+                : { error: resumeError }),
+            },
+          }).catch(() => {})
           sendResponse(result)
-        }).catch((e) => {
+        }).catch(async (e) => {
           if (resumeControllers.get(tabId) === controller) {
             resumeControllers.delete(tabId)
           }
-          sendResponse({ type: 'RESUME_ERROR', error: (e as Error).message })
+          const error = (e as Error).message
+          chrome.runtime.sendMessage({
+            type: 'RESUME_COMPLETE',
+            payload: { tabId, ok: false, error },
+          }).catch(() => {})
+          sendResponse({ type: 'RESUME_ERROR', error })
         })
         return true
       }

@@ -12,15 +12,16 @@
 7. content.ts runs extractJob() (DOM parsing)
 8. Returns JD_EXTRACTED { job: ExtractedJob } → background → sidepanel
 9. Sidepanel renders JobSummaryCard, awaits user confirmation
-10. User clicks "Analyze" → ANALYZE_JD → background.ts (deduplication: if same
-    job_id is already in-flight across tabs, the existing promise is reused)
+10. User clicks "Analyze" → ANALYZE_JD → background.ts (fire-and-forget; deduplication:
+    if same job_id is already in-flight across tabs, the existing promise is reused)
 11. background calls runAllEvaluators(job, profile, config, customPrompt, onProgress)
 12. 5 LLM evaluators run in parallel (Promise.all)
 13. Each evaluator calls onProgress() → background sends ANALYSIS_PROGRESS → sidepanel
 14. Sidepanel updates EvaluatorCard status in real-time
 15. All evaluators settle → aggregate() computes score, verdict, risks, tips
-16. AggregatedReport saved to IndexedDB
-17. background sends ANALYSIS_RESULT → sidepanel renders AnalysisReport
+16. background persists AggregatedReport to IndexedDB (read-modify-write on session)
+17. background broadcasts ANALYSIS_COMPLETE → sidepanel renders AnalysisReport
+    (best-effort sendResponse also fires; ignored if broadcast already arrived)
 ```
 
 ---
@@ -30,11 +31,12 @@
 ```
 1. User clicks "Generate Resume" (after analysis)
 2. useResumeGenerator.generate(job, analysisContext) → GENERATE_RESUME → background
+   (fire-and-forget for remote backend; result via RESUME_COMPLETE broadcast)
 3. background calls resume evaluator with:
    - Job description (Markdown)
    - Original resume + projects
    - AggregatedReport context (verdict, strengths, gaps)
-4. Returns RESUME_RESULT { markdown, summary } → sidepanel
+4. background persists result to IDB, broadcasts RESUME_COMPLETE → sidepanel
 5. ResumeView renders Preview tab (marked → HTML) and Edit tab (raw Markdown)
 6. User optionally edits or types feedback → submits (Cmd+Enter)
 7. useResumeGenerator.regenerate(job, comment) → GENERATE_RESUME with:

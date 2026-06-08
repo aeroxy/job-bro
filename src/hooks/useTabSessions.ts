@@ -11,7 +11,7 @@ import type {
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
 import type { LLMConfig } from '@/types/profile'
-import type { AnalysisProgressMessage } from '@/types/messages'
+import type { AnalysisProgressMessage, AnalysisCompleteMessage, ResumeCompleteMessage } from '@/types/messages'
 import type { ToolCall } from '@/lib/tools/types'
 import { deleteSession, getSessionByJobId, saveSession } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
@@ -666,6 +666,46 @@ export function useTabSessions(
     return () => chrome.runtime.onMessage.removeListener(listener)
   }, [updateSessionAndRender])
 
+  // Listen for completion events from remote (cloud) backend runs.
+  // The background persists results to IDB and broadcasts these before
+  // attempting sendResponse, so the sidepanel gets results even if the
+  // service worker's message channel died mid-work.
+  useEffect(() => {
+    const listener = (message: AnalysisCompleteMessage | ResumeCompleteMessage) => {
+      if (message.type === 'ANALYSIS_COMPLETE') {
+        const { tabId } = message.payload
+        const session = sessionsRef.current.get(tabId)
+        if (!session || session.status !== 'analyzing') return
+        if (message.payload.ok && message.payload.report) {
+          updateSessionAndRender(tabId, { report: message.payload.report, status: 'done' })
+          persistSession(tabId).catch(() => {})
+        } else if (!message.payload.ok) {
+          updateSessionAndRender(tabId, { error: message.payload.error || 'Analysis failed', status: 'error' })
+          persistSession(tabId).catch(() => {})
+        }
+      } else if (message.type === 'RESUME_COMPLETE') {
+        const { tabId } = message.payload
+        const session = sessionsRef.current.get(tabId)
+        if (!session || session.resumeStatus !== 'generating') return
+        if (message.payload.ok) {
+          updateSessionAndRender(tabId, {
+            resumeMarkdown: message.payload.markdown ?? null,
+            resumeSummary: message.payload.summary ?? null,
+            resumeStatus: 'done',
+          })
+          persistSession(tabId).catch(() => {})
+        } else {
+          updateSessionAndRender(tabId, {
+            resumeError: message.payload.error || 'Resume generation failed',
+            resumeStatus: 'error',
+          })
+        }
+      }
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [updateSessionAndRender, persistSession])
+
   const extract = useCallback(async () => {
     const tabId = activeTabIdRef.current
     if (!tabId) return null
@@ -803,38 +843,30 @@ export function useTabSessions(
     const controller = new AbortController()
     localAnalysisControllersRef.current.set(tabId, controller)
 
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'ANALYZE_JD',
-        tabId,
-        payload: { job: extractedJob, priorResults },
-      })
-
-      if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
-      if (cancelledRef.current.has(tabId)) return null
-
-      if (response.type === 'ANALYSIS_RESULT') {
-        updateSessionAndRender(tabId, { report: response.payload, status: 'done' })
-        await persistSession(tabId)
-        return response.payload as AggregatedReport
-      }
-      updateSessionAndRender(tabId, { error: response.error || 'Analysis failed', status: 'error' })
-      await persistSession(tabId)
-      return null
-    } catch (e) {
-      if (localAnalysisControllersRef.current.get(tabId) !== controller) return null
-      if ((e as Error).name === 'AbortError') return null
-      if (cancelledRef.current.has(tabId)) return null
+    // Fire-and-forget: the background persists results to IDB and broadcasts
+    // ANALYSIS_COMPLETE, which the completion listener above folds into state.
+    // We don't await the response because the service worker can die mid-work,
+    // destroying the message channel.
+    chrome.runtime.sendMessage({
+      type: 'ANALYZE_JD',
+      tabId,
+      payload: { job: extractedJob, priorResults },
+    }).catch((e) => {
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return
+      if (cancelledRef.current.has(tabId)) return
       updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
-      await persistSession(tabId)
-      return null
-    } finally {
+    }).finally(() => {
       cancelledRef.current.delete(tabId)
       if (localAnalysisControllersRef.current.get(tabId) === controller) {
         localAnalysisControllersRef.current.delete(tabId)
       }
-    }
-  }, [updateSessionAndRender, persistSession])
+    })
+
+    // The actual result arrives via the ANALYSIS_COMPLETE broadcast listener.
+    // Returning null here; the analyze() caller doesn't use the return value
+    // for remote runs — the completion listener updates state directly.
+    return null
+  }, [updateSessionAndRender])
 
   const analyze = useCallback(async (extractedJob: ExtractedJob) => {
     const tabId = activeTabIdRef.current
@@ -1051,7 +1083,7 @@ export function useTabSessions(
   const runResumeGeneration = useCallback(async (
     tabId: number,
     initialPatch: Partial<TabSession>,
-    work: (signal: AbortSignal) => Promise<ResumeResult>,
+    work: ((signal: AbortSignal) => Promise<ResumeResult>) | null,
   ) => {
     updateSessionAndRender(tabId, initialPatch)
 
@@ -1059,6 +1091,11 @@ export function useTabSessions(
     cancelledRef.current.delete(tabId)
     const controller = new AbortController()
     localResumeControllersRef.current.set(tabId, controller)
+
+    // null work = remote fire-and-forget. The RESUME_COMPLETE broadcast
+    // listener (above) handles the result; we just maintain the 'generating'
+    // state until it arrives or the user cancels.
+    if (!work) return
 
     try {
       const result = await work(controller.signal)
@@ -1097,24 +1134,23 @@ export function useTabSessions(
     const session = getSession(tabId)
     const jobId = job.job_id
 
+    if (backendRef.current !== 'chrome-prompt') {
+      // Remote: fire-and-forget. Result arrives via RESUME_COMPLETE broadcast.
+      chrome.runtime.sendMessage({
+        type: 'GENERATE_RESUME',
+        tabId,
+        payload: { job, analysisContext, qnaHistory: session.qnaHistory },
+      }).catch(() => {})
+    }
+
     const run = runResumeGeneration(tabId, {
       resumeStatus: 'generating',
       resumeError: null,
       resumeMarkdown: null,
       resumeSummary: null,
-    }, async (signal) => {
-      if (backendRef.current === 'chrome-prompt') {
-        return runResume(job, analysisContext, undefined, undefined, undefined, session.qnaHistory, signal)
-      }
-      const response = await chrome.runtime.sendMessage({
-        type: 'GENERATE_RESUME',
-        tabId,
-        payload: { job, analysisContext, qnaHistory: session.qnaHistory },
-      })
-      return response.type === 'RESUME_RESULT'
-        ? { ok: true, markdown: response.payload.markdown, summary: response.payload.summary }
-        : { ok: false, error: response.error || 'Resume generation failed' }
-    })
+    }, backendRef.current === 'chrome-prompt' ? async (signal) => {
+      return runResume(job, analysisContext, undefined, undefined, undefined, session.qnaHistory, signal)
+    } : null)
 
     if (jobId) {
       resumeOwnerTabRef.current.set(jobId, tabId)
@@ -1132,22 +1168,8 @@ export function useTabSessions(
     const session = getSession(tabId)
     const jobId = job.job_id
 
-    const run = runResumeGeneration(tabId, {
-      resumeStatus: 'generating',
-      resumeError: null,
-    }, async (signal) => {
-      if (backendRef.current === 'chrome-prompt') {
-        return runResume(
-          job,
-          undefined,
-          session.resumeMarkdown ?? undefined,
-          session.resumeSummary ?? undefined,
-          comment.trim() || undefined,
-          session.qnaHistory,
-          signal,
-        )
-      }
-      const response = await chrome.runtime.sendMessage({
+    if (backendRef.current !== 'chrome-prompt') {
+      chrome.runtime.sendMessage({
         type: 'GENERATE_RESUME',
         tabId,
         payload: {
@@ -1157,11 +1179,23 @@ export function useTabSessions(
           comment: comment.trim() || undefined,
           qnaHistory: session.qnaHistory,
         },
-      })
-      return response.type === 'RESUME_RESULT'
-        ? { ok: true, markdown: response.payload.markdown, summary: response.payload.summary }
-        : { ok: false, error: response.error || 'Resume generation failed' }
-    })
+      }).catch(() => {})
+    }
+
+    const run = runResumeGeneration(tabId, {
+      resumeStatus: 'generating',
+      resumeError: null,
+    }, backendRef.current === 'chrome-prompt' ? async (signal) => {
+      return runResume(
+        job,
+        undefined,
+        session.resumeMarkdown ?? undefined,
+        session.resumeSummary ?? undefined,
+        comment.trim() || undefined,
+        session.qnaHistory,
+        signal,
+      )
+    } : null)
 
     if (jobId) {
       resumeOwnerTabRef.current.set(jobId, tabId)

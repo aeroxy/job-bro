@@ -143,6 +143,32 @@ export type ChatErrorMessage = {
 
 export type ChatResponse = ChatResponseMessage | ChatErrorMessage
 
+// Background -> all: analysis finished (broadcast, not request/response).
+// The background persists the report to IndexedDB before sending this, so
+// the sidepanel can recover from storage if the broadcast is missed.
+export type AnalysisCompleteMessage = {
+  type: 'ANALYSIS_COMPLETE'
+  payload: {
+    tabId: number
+    ok: boolean
+    report?: AggregatedReport
+    error?: string
+  }
+}
+
+// Background -> all: resume generation finished (broadcast).
+// Same pattern as AnalysisCompleteMessage — persist then broadcast.
+export type ResumeCompleteMessage = {
+  type: 'RESUME_COMPLETE'
+  payload: {
+    tabId: number
+    ok: boolean
+    markdown?: string
+    summary?: string
+    error?: string
+  }
+}
+
 export type Message =
   | RequestExtractionMessage
   | ExtractJDMessage
@@ -154,9 +180,11 @@ export type Message =
   | AnalysisResultMessage
   | AnalysisProgressMessage
   | AnalysisErrorMessage
+  | AnalysisCompleteMessage
   | GenerateResumeMessage
   | ResumeResultMessage
   | ResumeErrorMessage
+  | ResumeCompleteMessage
   | ChatRequestMessage
   | ChatResponseMessage
   | ChatErrorMessage
