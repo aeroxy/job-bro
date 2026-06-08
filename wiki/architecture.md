@@ -87,14 +87,16 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `EXTRACT_JD` | background → content | Trigger DOM extraction |
 | `JD_EXTRACTED` | content → background | Returns `ExtractedJob` (includes `job_id`) |
 | `JD_EXTRACTION_FAILED` | content → background | Extraction error |
-| `ANALYZE_JD` | sidepanel → background | Start evaluators |
+| `ANALYZE_JD` | sidepanel → background | Start evaluators (fire-and-forget; result via `ANALYSIS_COMPLETE`) |
 | `ANALYSIS_PROGRESS` | background → sidepanel | Per-evaluator status update |
-| `ANALYSIS_RESULT` | background → sidepanel | Final `AggregatedReport` |
+| `ANALYSIS_RESULT` | background → sidepanel | Final `AggregatedReport` (best-effort sendResponse) |
 | `ANALYSIS_ERROR` | background → sidepanel | Evaluator failure |
-| `GENERATE_RESUME` | sidepanel → background | Trigger resume generation (includes `tabId`, `qnaHistory`) |
+| `ANALYSIS_COMPLETE` | background → all | Broadcast on analysis finish; persists report to IDB first |
+| `GENERATE_RESUME` | sidepanel → background | Trigger resume generation (fire-and-forget; result via `RESUME_COMPLETE`) |
 | `CANCEL_RESUME` | sidepanel → background | Abort in-progress resume generation for a tab |
-| `RESUME_RESULT` | background → sidepanel | Markdown resume + changelog |
+| `RESUME_RESULT` | background → sidepanel | Markdown resume + changelog (best-effort sendResponse) |
 | `RESUME_ERROR` | background → sidepanel | Resume generation failure |
+| `RESUME_COMPLETE` | background → all | Broadcast on resume finish; persists result to IDB first |
 | `CANCEL_ANALYSIS` | sidepanel → background | Abort in-progress analysis for a tab |
 | `CHAT_REQUEST` | sidepanel → background | Follow-up Q&A question |
 | `CHAT_RESPONSE` | background → sidepanel | Q&A answer |
