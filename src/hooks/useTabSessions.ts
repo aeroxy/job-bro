@@ -154,6 +154,7 @@ const DEFAULT_SESSION: TabSession = {
  */
 export function useTabSessions(
   activeTabId: number | null,
+  getActiveTabId: () => Promise<number | null>,
   onTabRemoved: Set<(tabId: number) => void>,
   llmConfig: LLMConfig,
 ) {
@@ -358,15 +359,16 @@ export function useTabSessions(
 
     try {
       const tab = await chrome.tabs.get(tabId).catch(() => null)
-      if (!tab) return // tab closed during the await
+      if (!tab) return
       const tabUrl = tab.url
+      console.log('[syncTab] tabId', tabId, 'url', tabUrl?.slice(0, 80))
 
       const current = sessionsRef.current.get(tabId)
       const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
       const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
       const currentJobId = current?.job?.job_id || current?.hydratedJobId
-      // URL change while mid-run — only cancel if the job actually changed
-      // (e.g. not just tracking params or hash fragment updates).
+      console.log('[syncTab] jobId', jobId, 'hydratedJobId', current?.hydratedJobId)
+
       if (midRun && opts.fromUrlChange && currentJobId !== jobId) {
         const siblings = currentJobId ? jobIdToTabIdsRef.current.get(currentJobId) : null
         const otherTabsViewingJob = Array.from(siblings ?? []).filter((t) => t !== tabId)
@@ -376,8 +378,8 @@ export function useTabSessions(
         }
       }
 
-      // Fast path: same job already loaded, nothing to do.
       if (current && current.hydratedJobId === jobId) {
+        console.log('[syncTab] fast-path skip')
         return
       }
 
@@ -398,17 +400,22 @@ export function useTabSessions(
       if (tabId === activeTabIdRef.current) rerender()
 
       if (!jobId) {
+        console.log('[syncTab] no jobId → idle')
         updateSessionAndRender(tabId, { hydratedJobId: null })
         return
       }
 
       const persisted = await getSessionByJobId(jobId)
+      console.log('[syncTab] persisted', persisted ? { status: persisted.status, hasReport: !!persisted.report } : null)
 
-      // Tab may have navigated again during the IDB read — bail if so.
       const latest = sessionsRef.current.get(tabId)
-      if (!latest || latest.status !== 'hydrating') return
+      if (!latest || latest.status !== 'hydrating') {
+        console.log('[syncTab] bail: latest status', latest?.status)
+        return
+      }
 
       if (!persisted) {
+        console.log('[syncTab] no persisted session → idle')
         updateSessionAndRender(tabId, { hydratedJobId: jobId, status: 'idle' })
         return
       }
@@ -673,6 +680,7 @@ export function useTabSessions(
   // service worker's message channel died mid-work.
   useEffect(() => {
     const listener = (message: AnalysisCompleteMessage | ResumeCompleteMessage) => {
+      if (!message || typeof message !== 'object') return
       if (message.type === 'ANALYSIS_COMPLETE') {
         const { tabId } = message.payload
         const session = sessionsRef.current.get(tabId)
@@ -680,7 +688,7 @@ export function useTabSessions(
         if (message.payload.ok && message.payload.report) {
           updateSessionAndRender(tabId, { report: message.payload.report, status: 'done' })
           persistSession(tabId).catch(() => {})
-        } else if (!message.payload.ok) {
+        } else {
           updateSessionAndRender(tabId, { error: message.payload.error || 'Analysis failed', status: 'error' })
           persistSession(tabId).catch(() => {})
         }
@@ -852,11 +860,7 @@ export function useTabSessions(
       type: 'ANALYZE_JD',
       tabId,
       payload: { job: extractedJob, priorResults },
-    }).catch((e) => {
-      if (localAnalysisControllersRef.current.get(tabId) !== controller) return
-      if (cancelledRef.current.has(tabId)) return
-      updateSessionAndRender(tabId, { error: (e as Error).message, status: 'error' })
-    }).finally(() => {
+    }).catch(() => {}).finally(() => {
       cancelledRef.current.delete(tabId)
       if (localAnalysisControllersRef.current.get(tabId) === controller) {
         localAnalysisControllersRef.current.delete(tabId)
@@ -1090,13 +1094,14 @@ export function useTabSessions(
 
     localResumeControllersRef.current.get(tabId)?.abort(new DOMException('New resume generation started', 'AbortError'))
     cancelledRef.current.delete(tabId)
-    const controller = new AbortController()
-    localResumeControllersRef.current.set(tabId, controller)
 
     // null work = remote fire-and-forget. The RESUME_COMPLETE broadcast
     // listener (above) handles the result; we just maintain the 'generating'
     // state until it arrives or the user cancels.
     if (!work) return
+
+    const controller = new AbortController()
+    localResumeControllersRef.current.set(tabId, controller)
 
     try {
       const result = await work(controller.signal)
@@ -1242,25 +1247,18 @@ export function useTabSessions(
     }
   }, [syncTab])
 
-  // Manual re-sync of the active tab. Clears the hydratedJobId guard so
-  // syncTab re-reads from IDB — picks up results from a background run that
-  // completed while the sidepanel's listener was not active.
-  const refresh = useCallback(() => {
-    const tabId = activeTabIdRef.current
+  const refresh = useCallback(async () => {
+    const tabId = activeTabIdRef.current ?? await getActiveTabId()
+    console.log('[refresh] tabId', tabId, 'activeTabIdRef', activeTabIdRef.current)
     if (!tabId) return
     const session = sessionsRef.current.get(tabId)
-    // Abort any in-flight local work so syncTab's result isn't overwritten
-    // by a stale controller's callback.
-    localAnalysisControllersRef.current.get(tabId)?.abort(new DOMException('Manual refresh', 'AbortError'))
-    localAnalysisControllersRef.current.delete(tabId)
-    localResumeControllersRef.current.get(tabId)?.abort(new DOMException('Manual refresh', 'AbortError'))
-    localResumeControllersRef.current.delete(tabId)
-    cancelledRef.current.add(tabId)
+    console.log('[refresh] session', session ? { status: session.status, hydratedJobId: session.hydratedJobId, jobId: session.job?.job_id } : null)
     if (session) {
       sessionsRef.current.set(tabId, { ...session, hydratedJobId: null })
     }
+    console.log('[refresh] calling syncTab')
     syncTab(tabId)
-  }, [syncTab])
+  }, [syncTab, getActiveTabId])
 
   // Current session for the active tab
   const current = activeTabId ? getSession(activeTabId) : DEFAULT_SESSION

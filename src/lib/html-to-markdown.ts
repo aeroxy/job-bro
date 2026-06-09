@@ -13,7 +13,7 @@ import TurndownService from 'turndown'
 function stripNonContent(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html')
   doc
-    .querySelectorAll('script, style, link[rel="stylesheet"], noscript, form, nav, footer, aside, select, button')
+    .querySelectorAll('script, style, link, meta[http-equiv="refresh"], noscript, form, nav, footer, aside, select, button')
     .forEach((el) => el.remove())
   // Turndown only the body so the <title> ("… at DuckDuckGo") doesn't leak in.
   return doc.body?.innerHTML ?? doc.documentElement.outerHTML

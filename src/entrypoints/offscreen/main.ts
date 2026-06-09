@@ -10,6 +10,11 @@
 
 import { parseHtmlToMarkdown } from '@/lib/html-to-markdown'
 import type { ChatMessage } from '@/lib/llm-client'
+import { runAnalysis, runResume } from '@/lib/llm-handlers'
+import type { ProgressCallback, ToolCallCallback, EvaluatorResultCallback } from '@/lib/llm-handlers'
+import type { AggregatedReport } from '@/types/evaluation'
+import type { ExtractedJob } from '@/types/job'
+import type { ChatTurn } from '@/types/chat'
 
 type ParseRequest = { type: 'PARSE_HTML'; html: string }
 
@@ -209,9 +214,140 @@ async function downloadInternal(): Promise<void> {
   session.destroy()
 }
 
+// --- Analysis & Resume Orchestration ---
+// Runs the full evaluator pipeline in the offscreen document, which has no
+// service worker idle/max-lifetime limits. Progress is broadcast to all
+// extension pages via chrome.runtime.sendMessage; completion is broadcast
+// as ANALYSIS_COMPLETE / RESUME_COMPLETE for the sidepanel to pick up.
+
+const analysisControllers = new Map<number, AbortController>()
+const resumeControllers = new Map<number, AbortController>()
+
+function broadcast(message: Record<string, unknown>) {
+  try { chrome.runtime.sendMessage(message).catch(() => {}) } catch { /* no listeners */ }
+}
+
+async function handleAnalyzeOffscreen(
+  tabId: number,
+  job: ExtractedJob,
+  priorResults?: Partial<AggregatedReport['evaluators']>,
+) {
+  analysisControllers.get(tabId)?.abort(new DOMException('New analysis started', 'AbortError'))
+  const controller = new AbortController()
+  analysisControllers.set(tabId, controller)
+  const signal = controller.signal
+
+  const onProgress: ProgressCallback = (evaluator, status) => {
+    if (signal.aborted) return
+    broadcast({ type: 'ANALYSIS_PROGRESS', payload: { tabId, evaluator, kind: 'status', status } })
+  }
+
+  const toolSeq = new Map<string, number>()
+  const onToolCall: ToolCallCallback = (evaluator, call) => {
+    if (signal.aborted) return
+    const seq = (toolSeq.get(evaluator) ?? 0) + 1
+    toolSeq.set(evaluator, seq)
+    let args: Record<string, string> = {}
+    try {
+      const parsed = JSON.parse(call.function.arguments) as Record<string, unknown>
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string') args[k] = v
+      }
+    } catch { /* malformed args */ }
+    const name = call.function.name
+    if (name !== 'web_search' && name !== 'read_page') return
+    broadcast({ type: 'ANALYSIS_PROGRESS', payload: { tabId, evaluator, kind: 'tool', tool: { name, args, seq } } })
+  }
+
+  const onEvaluatorResult: EvaluatorResultCallback = (evaluator, result) => {
+    if (signal.aborted) return
+    broadcast({ type: 'ANALYSIS_PROGRESS', payload: { tabId, evaluator, kind: 'result', result } })
+  }
+
+  try {
+    const result = await runAnalysis(job, signal, onProgress, onToolCall, onEvaluatorResult, priorResults)
+    if (analysisControllers.get(tabId) === controller) analysisControllers.delete(tabId)
+    const ok = result.ok
+    broadcast({
+      type: 'ANALYSIS_COMPLETE',
+      payload: { tabId, ok, ...(ok ? { report: result.report } : { error: result.error }) },
+    })
+  } catch (e) {
+    if (analysisControllers.get(tabId) === controller) analysisControllers.delete(tabId)
+    if ((e as Error).name === 'AbortError') return
+    broadcast({ type: 'ANALYSIS_COMPLETE', payload: { tabId, ok: false, error: (e as Error).message } })
+  }
+}
+
+async function handleResumeOffscreen(
+  tabId: number,
+  job: ExtractedJob,
+  analysisContext?: string,
+  previousResume?: string,
+  previousSummary?: string,
+  comment?: string,
+  qnaHistory?: ChatTurn[],
+) {
+  resumeControllers.get(tabId)?.abort(new DOMException('New resume generation started', 'AbortError'))
+  const controller = new AbortController()
+  resumeControllers.set(tabId, controller)
+
+  try {
+    const result = await runResume(job, analysisContext, previousResume, previousSummary, comment, qnaHistory, controller.signal)
+    if (resumeControllers.get(tabId) === controller) resumeControllers.delete(tabId)
+    const ok = result.ok
+    broadcast({
+      type: 'RESUME_COMPLETE',
+      payload: {
+        tabId, ok,
+        ...(ok ? { markdown: result.markdown, summary: result.summary } : { error: result.error }),
+      },
+    })
+  } catch (e) {
+    if (resumeControllers.get(tabId) === controller) resumeControllers.delete(tabId)
+    if ((e as Error).name === 'AbortError') return
+    broadcast({ type: 'RESUME_COMPLETE', payload: { tabId, ok: false, error: (e as Error).message } })
+  }
+}
+
 // --- Dispatcher ---
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Analysis orchestration — runs the full evaluator pipeline in the offscreen.
+  // Fire-and-forget: results delivered via ANALYSIS_COMPLETE broadcast.
+  // Uses OFFSCREEN_ prefix to avoid double-receive (sidepanel broadcasts
+  // ANALYZE_JD directly; background relays as OFFSCREEN_ANALYZE_JD).
+  if (message?.type === 'OFFSCREEN_ANALYZE_JD') {
+    handleAnalyzeOffscreen(message.tabId, message.payload.job, message.payload.priorResults)
+    return false
+  }
+
+  // Resume orchestration — same pattern.
+  if (message?.type === 'OFFSCREEN_GENERATE_RESUME') {
+    handleResumeOffscreen(
+      message.tabId,
+      message.payload.job,
+      message.payload.analysisContext,
+      message.payload.previousResume,
+      message.payload.previousSummary,
+      message.payload.comment,
+      message.payload.qnaHistory,
+    )
+    return false
+  }
+
+  // Cancellation — abort in-flight offscreen controllers.
+  if (message?.type === 'CANCEL_ANALYSIS') {
+    analysisControllers.get(message.tabId)?.abort(new DOMException('Cancelled', 'AbortError'))
+    analysisControllers.delete(message.tabId)
+    return false
+  }
+  if (message?.type === 'CANCEL_RESUME') {
+    resumeControllers.get(message.tabId)?.abort(new DOMException('Cancelled', 'AbortError'))
+    resumeControllers.delete(message.tabId)
+    return false
+  }
+
   // PARSE_HTML — handled synchronously (DOMParser is fast, no queue needed).
   if (message?.type === 'PARSE_HTML') {
     const req = message as ParseRequest

@@ -1,14 +1,11 @@
-import { runAnalysis, runChat, runResume } from '@/lib/llm-handlers'
-import type { EvaluatorResultCallback, ToolCallCallback } from '@/lib/llm-handlers'
-import type { ChatResponse, ExtractionResponse, Message, ResumeResponse } from '@/types/messages'
+import { runChat } from '@/lib/llm-handlers'
+import type { ChatResponse, ExtractionResponse, Message } from '@/types/messages'
+import type { AggregatedReport } from '@/types/evaluation'
 import { getSessionByJobId, saveSession } from '@/lib/db'
 
 // Runs on every service-worker startup — confirms which build is live so a
 // stale (un-reloaded) worker is immediately obvious in the console.
 console.log(`[Job Bro] service worker init — v${__VERSION__}, built ${__BUILD_TIME__}`)
-
-const analysisControllers = new Map<number, AbortController>()
-const resumeControllers = new Map<number, AbortController>()
 
 const OFFSCREEN_URL = 'offscreen.html'
 const OFFSCREEN_REASONS: chrome.offscreen.Reason[] = [chrome.offscreen.Reason.DOM_PARSER]
@@ -16,31 +13,22 @@ const OFFSCREEN_REASONS: chrome.offscreen.Reason[] = [chrome.offscreen.Reason.DO
 let offscreenReady: Promise<void> | null = null
 
 // Ensure the offscreen document exists. Idempotent — reuses the existing
-// document if one is already alive. The offscreen document runs the
-// DOMParser + Turndown work; the service worker only does fetch + routing.
-// Service-worker-only: chrome.offscreen.createDocument is unavailable from
-// extension pages.
+// document if one is already alive. The offscreen document runs the full
+// analysis/resume orchestration (no service worker lifetime limits), the
+// DOMParser + Turndown work, and Chrome AI sessions.
 async function ensureOffscreen(): Promise<void> {
-  // Await any in-flight creation so concurrent callers don't race a second one.
   if (offscreenReady) {
     try { await offscreenReady } catch { offscreenReady = null }
   }
-  // Verify liveness on every call — Chrome can tear down the offscreen document
-  // independently, and a cached resolved promise would otherwise mask that and
-  // leave callers messaging a document that no longer exists.
   if (await hasOffscreenDocument()) return
   offscreenReady = (async () => {
     try {
       await chrome.offscreen.createDocument({
         url: OFFSCREEN_URL,
         reasons: OFFSCREEN_REASONS,
-        justification: 'Parse fetched HTML into markdown for the agent tools.',
+        justification: 'Parse fetched HTML into markdown and run LLM orchestration for the agent tools.',
       })
     } catch (e) {
-      // TOCTOU: another caller (or a still-resolving createDocument) may have
-      // created the document between our check and this call. Chrome rejects
-      // the second create with this message — which means the document we
-      // wanted already exists, so treat it as success.
       const msg = e instanceof Error ? e.message : String(e)
       if (msg.includes('Only a single offscreen document')) return
       throw e
@@ -52,8 +40,6 @@ async function ensureOffscreen(): Promise<void> {
   return offscreenReady
 }
 
-// Reliable existence check. getContexts is the supported API for this in MV3;
-// hasDocument is undocumented and racier. Falls back gracefully if unavailable.
 async function hasOffscreenDocument(): Promise<boolean> {
   try {
     const contexts = await chrome.runtime.getContexts({
@@ -62,44 +48,77 @@ async function hasOffscreenDocument(): Promise<boolean> {
     })
     return contexts.length > 0
   } catch {
-    // getContexts unavailable — let createDocument run; its error is handled.
     return false
   }
 }
 
 /**
  * Background service worker for the Job Bro extension.
- * Orchestrates job extraction, analysis, and resume generation by coordinating
- * between the content scripts and the LLM handlers.
+ * Relays analysis/resume orchestration to the offscreen document (which has
+ * no service worker lifetime limits), handles extraction and chat directly,
+ * and persists results to IndexedDB on completion broadcasts.
  */
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
-  // Eagerly create the offscreen document so the agent tools are ready by the
-  // time an analysis is requested. Service workers can be killed and restarted
-  // — ensureOffscreen is idempotent and re-creates the document if the system
-  // closed it.
   ensureOffscreen().catch((e) => console.warn('[Job Bro] Offscreen create failed', e))
 
   chrome.runtime.onInstalled.addListener((details) => {
     console.log('[Job Bro] Extension installed or updated:', details.reason)
   })
 
-  // Clean up controllers when tabs are closed
+  // When tabs are closed, forward cancellation to the offscreen so it can
+  // abort any in-flight analysis/resume controllers for that tab.
   chrome.tabs.onRemoved.addListener((tabId) => {
-    const controller = analysisControllers.get(tabId)
-    if (controller) {
-      controller.abort(new DOMException('Tab was closed', 'AbortError'))
-      analysisControllers.delete(tabId)
+    chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId }).catch(() => {})
+    chrome.runtime.sendMessage({ type: 'CANCEL_RESUME', tabId }).catch(() => {})
+  })
+
+  // Persist results to IDB when the offscreen broadcasts completion events.
+  chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+    if (message?.type === 'ANALYSIS_COMPLETE' && message.payload?.ok && message.payload.report) {
+      const jobId = message.payload.report.job_id as string | undefined
+      if (jobId) {
+        getSessionByJobId(jobId).then((existing) => {
+          if (existing) {
+            saveSession({
+              ...existing,
+              report: message.payload.report as AggregatedReport,
+              updatedAt: Date.now(),
+              status: 'done',
+            }).catch(() => {})
+          } else {
+            console.warn('[Job Bro] ANALYSIS_COMPLETE for unknown jobId; skipping IDB persist (sidepanel persistSession should cover this).', jobId)
+          }
+        }).catch(() => {})
+      }
     }
-    const resumeController = resumeControllers.get(tabId)
-    if (resumeController) {
-      resumeController.abort(new DOMException('Tab was closed', 'AbortError'))
-      resumeControllers.delete(tabId)
+    if (message?.type === 'RESUME_COMPLETE' && message.payload?.ok) {
+      // Resume persistence is handled by the sidepanel's persistSession on
+      // receiving RESUME_COMPLETE. The background doesn't persist resume here
+      // because the completion message doesn't include jobId.
     }
+    return false
   })
 
   chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
+    // Storage bridge: the offscreen document doesn't have chrome.storage
+    // access, so it routes reads/writes through the background.
+    if (message && (message as { type?: string }).type === 'GET_STORAGE') {
+      const key = (message as unknown as { key: string }).key
+      chrome.storage.local.get(key).then(sendResponse).catch(() => {
+        sendResponse({})
+      })
+      return true
+    }
+    if (message && (message as { type?: string }).type === 'SET_STORAGE') {
+      const items = (message as unknown as { items: Record<string, unknown> }).items
+      chrome.storage.local.set(items).then(() => sendResponse(undefined)).catch(() => {
+        sendResponse(undefined)
+      })
+      return true
+    }
+
     // The offscreen document handles PARSE_HTML. Returning false here means
     // "don't claim the response" so the offscreen's listener can call
     // sendResponse and the caller's sendMessage awaits it.
@@ -114,129 +133,35 @@ export default defineBackground(() => {
         })
         return true
 
-      case 'CANCEL_ANALYSIS': {
-        const controller = analysisControllers.get(message.tabId)
-        if (controller) {
-          controller.abort(new DOMException('User stopped analysis', 'AbortError'))
-          analysisControllers.delete(message.tabId)
-        }
-        return false
-      }
-
-      case 'CANCEL_RESUME': {
-        const resumeCtrl = resumeControllers.get(message.tabId)
-        if (resumeCtrl) {
-          resumeCtrl.abort(new DOMException('User stopped resume generation', 'AbortError'))
-          resumeControllers.delete(message.tabId)
-        }
-        return false
-      }
-
-      case 'ANALYZE_JD': {
-        const tabId = message.tabId
-        const existing = analysisControllers.get(tabId)
-        if (existing) {
-          existing.abort(new DOMException('New analysis started', 'AbortError'))
-        }
-        const controller = new AbortController()
-        analysisControllers.set(tabId, controller)
-        const job = message.payload.job
-        handleAnalyzeJD(job, controller.signal, tabId, message.payload.priorResults).then(async (result) => {
-          if (analysisControllers.get(tabId) === controller) {
-            analysisControllers.delete(tabId)
-          }
-          // Persist to IDB and broadcast so the sidepanel gets the result even
-          // if the service worker dies before sendResponse reaches it.
-          const ok = result.type === 'ANALYSIS_RESULT'
-          const report = ok ? (result as any).payload : undefined
-          const analysisError = !ok ? (result as any).error : undefined
-          if (ok && report && job.job_id) {
-            try {
-              const existing = await getSessionByJobId(job.job_id)
-              if (existing) {
-                await saveSession({ ...existing, report, updatedAt: Date.now(), status: 'done' })
-              }
-            } catch { /* best-effort persist */ }
-          }
-          chrome.runtime.sendMessage({
-            type: 'ANALYSIS_COMPLETE',
-            payload: { tabId, ok, ...(ok ? { report } : { error: analysisError }) },
-          }).catch(() => {})
-          sendResponse(result)
-        }).catch(async (e) => {
-          if (analysisControllers.get(tabId) === controller) {
-            analysisControllers.delete(tabId)
-          }
-          const error = (e as Error).message
-          chrome.runtime.sendMessage({
-            type: 'ANALYSIS_COMPLETE',
-            payload: { tabId, ok: false, error },
-          }).catch(() => {})
-          sendResponse({ type: 'ANALYSIS_ERROR', error })
+      // Analysis and resume are relayed to the offscreen document, which runs
+      // the full pipeline without service worker lifetime limits. The offscreen
+      // broadcasts ANALYSIS_COMPLETE / RESUME_COMPLETE when done.
+      // IMPORTANT: transform the message type so the offscreen only processes
+      // the background's relay, not the sidepanel's direct broadcast. Without
+      // this, the offscreen receives the message twice, aborting the first
+      // run and restarting.
+      case 'ANALYZE_JD':
+        ensureOffscreen().then(() => {
+          chrome.runtime.sendMessage({ ...message, type: 'OFFSCREEN_ANALYZE_JD' }).catch(() => {})
+        }).catch((e) => {
+          console.error('[Job Bro] Failed to ensure offscreen for analysis:', e)
         })
-        return true
-      }
+        return false
 
-      case 'GENERATE_RESUME': {
-        const tabId = message.tabId
-        const existingResume = resumeControllers.get(tabId)
-        if (existingResume) {
-          existingResume.abort(new DOMException('New resume generation started', 'AbortError'))
-        }
-        const controller = new AbortController()
-        resumeControllers.set(tabId, controller)
-        const resumeJob = message.payload.job
-        handleGenerateResume(
-          resumeJob,
-          controller.signal,
-          message.payload.analysisContext,
-          message.payload.previousResume,
-          message.payload.previousSummary,
-          message.payload.comment,
-          message.payload.qnaHistory
-        ).then(async (result) => {
-          if (resumeControllers.get(tabId) === controller) {
-            resumeControllers.delete(tabId)
-          }
-          const ok = result.type === 'RESUME_RESULT'
-          const payload = ok ? (result as any).payload : undefined
-          const resumeError = !ok ? (result as any).error : undefined
-          if (ok && payload && resumeJob.job_id) {
-            try {
-              const existing = await getSessionByJobId(resumeJob.job_id)
-              if (existing) {
-                await saveSession({
-                  ...existing,
-                  resumeMarkdown: payload.markdown,
-                  resumeSummary: payload.summary,
-                  updatedAt: Date.now(),
-                })
-              }
-            } catch { /* best-effort persist */ }
-          }
-          chrome.runtime.sendMessage({
-            type: 'RESUME_COMPLETE',
-            payload: {
-              tabId, ok,
-              ...(ok
-                ? { markdown: payload.markdown, summary: payload.summary }
-                : { error: resumeError }),
-            },
-          }).catch(() => {})
-          sendResponse(result)
-        }).catch(async (e) => {
-          if (resumeControllers.get(tabId) === controller) {
-            resumeControllers.delete(tabId)
-          }
-          const error = (e as Error).message
-          chrome.runtime.sendMessage({
-            type: 'RESUME_COMPLETE',
-            payload: { tabId, ok: false, error },
-          }).catch(() => {})
-          sendResponse({ type: 'RESUME_ERROR', error })
+      case 'GENERATE_RESUME':
+        ensureOffscreen().then(() => {
+          chrome.runtime.sendMessage({ ...message, type: 'OFFSCREEN_GENERATE_RESUME' }).catch(() => {})
+        }).catch((e) => {
+          console.error('[Job Bro] Failed to ensure offscreen for resume:', e)
         })
-        return true
-      }
+        return false
+
+      // Cancellation: the offscreen also receives CANCEL_ANALYSIS/CANCEL_RESUME
+      // directly via broadcast from the sidepanel. No relay needed here — the
+      // background has no controllers to clean up anymore.
+      case 'CANCEL_ANALYSIS':
+      case 'CANCEL_RESUME':
+        return false
 
       case 'CHAT_REQUEST':
         handleChatMessage(
@@ -250,16 +175,27 @@ export default defineBackground(() => {
         return true
 
       default:
+        // Handle DDG bot challenge tab opening (forwarded from offscreen where
+        // chrome.tabs may be unavailable).
+        if ((message as { type?: string }).type === 'OPEN_DDGC_CHALLENGE_TAB') {
+          const url = (message as { url?: string }).url
+          if (url) {
+            chrome.tabs.query({ url: 'https://html.duckduckgo.com/*' }).then((existing) => {
+              const tabId = existing[0]?.id
+              if (tabId != null) {
+                chrome.tabs.update(tabId, { active: true, url })
+              } else {
+                chrome.tabs.create({ url, active: true })
+              }
+            }).catch(() => {})
+          }
+          return false
+        }
         return false
     }
   })
 })
 
-/**
- * Validates the tab state and requests job description extraction from the content script.
- * @param tabId - The ID of the tab to extract from.
- * @returns A promise resolving to the extraction response.
- */
 async function handleRequestExtraction(tabId: number): Promise<ExtractionResponse> {
   const tab = await chrome.tabs.get(tabId).catch(() => null)
 
@@ -277,18 +213,11 @@ async function handleRequestExtraction(tabId: number): Promise<ExtractionRespons
   return sendExtractMessage(tab.id!)
 }
 
-/**
- * Sends an extraction message to the content script, attempting to re-inject
- * the script if the first attempt fails.
- * @param tabId - The ID of the tab to send the message to.
- * @returns A promise resolving to the extraction response.
- */
 async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
-  // First attempt: message the already-running content script
   const response = await new Promise<ExtractionResponse | null>((resolve) => {
     chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_JD' }, (res) => {
       if (chrome.runtime.lastError) {
-        resolve(null) // content script not running
+        resolve(null)
       } else {
         resolve(res as ExtractionResponse)
       }
@@ -297,8 +226,6 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
 
   if (response) return response
 
-  // Content script not running (tab was open before extension loaded).
-  // Inject it programmatically, then retry.
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -311,7 +238,6 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
     }
   }
 
-  // Retry after injection
   return new Promise<ExtractionResponse>((resolve) => {
     chrome.tabs.sendMessage(tabId, { type: 'EXTRACT_JD' }, (res) => {
       if (chrome.runtime.lastError) {
@@ -326,83 +252,6 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
   })
 }
 
-/**
- * Orchestrates job analysis by calling runAnalysis and broadcasting progress updates.
- * @param job - The extracted job description.
- * @param signal - AbortSignal for cancellation.
- * @param tabId - The initiator tab ID.
- * @returns A promise resolving to the analysis result message.
- */
-async function handleAnalyzeJD(
-  job: import('@/types/job').ExtractedJob,
-  signal: AbortSignal,
-  tabId: number,
-  priorResults?: Partial<import('@/types/evaluation').AggregatedReport['evaluators']>,
-) {
-  // Make sure the offscreen parser is alive before evaluators may try to
-  // call web_search / read_page.
-  await ensureOffscreen()
-
-  // Guard every late callback: once this run's signal is aborted (the user
-  // stopped it, or a newer analysis superseded it), suppress its messages so a
-  // cancelled run can't overwrite the new run's state for this tab.
-  const onProgress = (evaluator: string, status: 'running' | 'completed' | 'error' | 'blocked') => {
-    if (signal.aborted) return
-    chrome.runtime.sendMessage({
-      type: 'ANALYSIS_PROGRESS',
-      payload: { tabId, evaluator, kind: 'status', status },
-    }).catch(() => { /* no listeners */ })
-  }
-
-  // Per-evaluator monotonic counter — lets the sidepanel dedupe / supersede
-  // in-flight tool activity (the latest "Searching X" replaces the previous one
-  // for the same evaluator's display row).
-  const toolSeqRef = { current: new Map<string, number>() }
-  const onToolCall: ToolCallCallback = (evaluator, call) => {
-    if (signal.aborted) return
-    const seq = (toolSeqRef.current.get(evaluator) ?? 0) + 1
-    toolSeqRef.current.set(evaluator, seq)
-    let args: Record<string, string> = {}
-    try {
-      const parsed = JSON.parse(call.function.arguments) as Record<string, unknown>
-      for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === 'string') args[k] = v
-      }
-    } catch {
-      /* malformed args — fall through with empty args */
-    }
-    const name = call.function.name
-    if (name !== 'web_search' && name !== 'read_page') return
-    chrome.runtime.sendMessage({
-      type: 'ANALYSIS_PROGRESS',
-      payload: { tabId, evaluator, kind: 'tool', tool: { name, args, seq } },
-    }).catch(() => { /* no listeners */ })
-  }
-
-  // Stream each evaluator's result as soon as it lands so the sidepanel can
-  // render that card's body immediately, not after the aggregator has
-  // bundled all of them. See AnalysisProgressMessage `kind: 'result'`.
-  const onEvaluatorResult: EvaluatorResultCallback = (evaluator, result) => {
-    if (signal.aborted) return
-    chrome.runtime.sendMessage({
-      type: 'ANALYSIS_PROGRESS',
-      payload: { tabId, evaluator, kind: 'result', result },
-    }).catch(() => { /* no listeners */ })
-  }
-
-  const result = await runAnalysis(job, signal, onProgress, onToolCall, onEvaluatorResult, priorResults)
-  if (result.ok) return { type: 'ANALYSIS_RESULT', payload: result.report }
-  return { type: 'ANALYSIS_ERROR', error: result.error }
-}
-
-/**
- * Handles interactive chat messages about a specific job posting.
- * @param question - The user's question.
- * @param history - Prior conversation turns.
- * @param jobMarkdown - The job description in markdown format.
- * @param analysisContext - The completed analysis report.
- * @returns A promise resolving to the chat response message.
- */
 async function handleChatMessage(
   question: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
@@ -412,29 +261,4 @@ async function handleChatMessage(
   const result = await runChat(question, history, jobMarkdown, analysisContext)
   if (result.ok) return { type: 'CHAT_RESPONSE', payload: { answer: result.answer } }
   return { type: 'CHAT_ERROR', error: result.error }
-}
-
-/**
- * Orchestrates resume generation based on a job posting and analysis.
- * @param job - The extracted job description.
- * @param signal - AbortSignal for cancellation.
- * @param analysisContext - Optional analysis report.
- * @param previousResume - Optional prior resume version.
- * @param previousSummary - Optional prior summary version.
- * @param comment - Optional user feedback for regeneration.
- * @param qnaHistory - Optional chat history for context.
- * @returns A promise resolving to the resume response message.
- */
-async function handleGenerateResume(
-  job: import('@/types/job').ExtractedJob,
-  signal: AbortSignal,
-  analysisContext?: string,
-  previousResume?: string,
-  previousSummary?: string,
-  comment?: string,
-  qnaHistory?: import('@/types/chat').ChatTurn[]
-): Promise<ResumeResponse> {
-  const result = await runResume(job, analysisContext, previousResume, previousSummary, comment, qnaHistory, signal)
-  if (result.ok) return { type: 'RESUME_RESULT', payload: { markdown: result.markdown, summary: result.summary } }
-  return { type: 'RESUME_ERROR', error: result.error }
 }

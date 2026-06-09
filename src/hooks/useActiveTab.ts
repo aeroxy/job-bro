@@ -1,16 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export function useActiveTab() {
   const [activeTabId, setActiveTabId] = useState<number | null>(null)
+  const windowIdRef = useRef<number | null>(null)
   const removedCallbacks = useRef(new Set<(tabId: number) => void>())
 
+  const getActiveTabId = useCallback(async (): Promise<number | null> => {
+    const win = await chrome.windows.getCurrent({ windowTypes: ['normal', 'popup'] }).catch(() => null)
+    const windowId = win?.id ?? null
+    if (windowId == null) return null
+    windowIdRef.current = windowId
+    const [tab] = await chrome.tabs.query({ active: true, windowId })
+    return tab?.id ?? null
+  }, [])
+
   useEffect(() => {
-    // Get initial active tab
-    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-      if (tab?.id) setActiveTabId(tab.id)
+    let mounted = true
+
+    getActiveTabId().then((tabId) => {
+      if (mounted && tabId != null) setActiveTabId(tabId)
     })
 
-    const onActivated = (info: chrome.tabs.TabActiveInfo) => {
+    const onActivated = async (info: chrome.tabs.TabActiveInfo) => {
+      if (info.windowId !== windowIdRef.current) return
       setActiveTabId(info.tabId)
     }
 
@@ -22,10 +34,11 @@ export function useActiveTab() {
     chrome.tabs.onRemoved.addListener(onRemoved)
 
     return () => {
+      mounted = false
       chrome.tabs.onActivated.removeListener(onActivated)
       chrome.tabs.onRemoved.removeListener(onRemoved)
     }
-  }, [])
+  }, [getActiveTabId])
 
-  return { activeTabId, onTabRemoved: removedCallbacks.current }
+  return { activeTabId, getActiveTabId, onTabRemoved: removedCallbacks.current }
 }
