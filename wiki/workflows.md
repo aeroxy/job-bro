@@ -12,16 +12,20 @@
 7. content.ts runs extractJob() (DOM parsing)
 8. Returns JD_EXTRACTED { job: ExtractedJob } → background → sidepanel
 9. Sidepanel renders JobSummaryCard, awaits user confirmation
-10. User clicks "Analyze" → ANALYZE_JD → background.ts (fire-and-forget; deduplication:
-    if same job_id is already in-flight across tabs, the existing promise is reused)
-11. background calls runAllEvaluators(job, profile, config, customPrompt, onProgress)
+10. User clicks "Analyze" → ANALYZE_JD → background.ts relays as OFFSCREEN_ANALYZE_JD → offscreen
+    Deduplication lives in src/hooks/useTabSessions.ts: analyze() checks analysisPromisesRef
+    (Map keyed by jobId) and returns the existing in-flight promise when another tab
+    triggers analysis for the same job_id. The reused promise represents only the analyze()
+    dispatch (fire-and-forget message send), not the full remote completion. background.ts
+    does NOT deduplicate by jobId — it only manages abort/replace by tabId.
+11. offscreen calls runAllEvaluators(job, profile, config, customPrompt, onProgress)
 12. 5 LLM evaluators run in parallel (Promise.all)
-13. Each evaluator calls onProgress() → background sends ANALYSIS_PROGRESS → sidepanel
+13. Each evaluator calls onProgress() → offscreen broadcasts ANALYSIS_PROGRESS → sidepanel
 14. Sidepanel updates EvaluatorCard status in real-time
 15. All evaluators settle → aggregate() computes score, verdict, risks, tips
-16. background persists AggregatedReport to IndexedDB (read-modify-write on session)
-17. background broadcasts ANALYSIS_COMPLETE → sidepanel renders AnalysisReport
-    (best-effort sendResponse also fires; ignored if broadcast already arrived)
+16. offscreen broadcasts ANALYSIS_COMPLETE with report/error
+17. background persists AggregatedReport to IndexedDB (read-modify-write on existing session)
+18. sidepanel's ANALYSIS_COMPLETE listener updates state and persists
 ```
 
 ---

@@ -9,33 +9,46 @@ const KEYS = {
   customPromptChrome: 'jobBroCustomPromptChrome',
 } as const
 
+// Storage bridge: chrome.storage.local is unavailable in offscreen documents.
+// When running in that context, route reads/writes through the background
+// service worker via chrome.runtime.sendMessage.
+const hasStorage = typeof chrome !== 'undefined' && !!chrome.storage?.local
+
+const storageGet = hasStorage
+  ? (key: string) => chrome.storage.local.get(key)
+  : (key: string) => chrome.runtime.sendMessage({ type: 'GET_STORAGE', key })
+
+const storageSet = hasStorage
+  ? (items: Record<string, unknown>) => chrome.storage.local.set(items)
+  : (items: Record<string, unknown>) => chrome.runtime.sendMessage({ type: 'SET_STORAGE', items }).then(() => undefined)
+
 export async function getProfile(): Promise<UserProfile | null> {
-  const result = await chrome.storage.local.get(KEYS.profile)
+  const result = await storageGet(KEYS.profile)
   return result[KEYS.profile] ?? null
 }
 
 export async function saveProfile(profile: UserProfile): Promise<void> {
-  await chrome.storage.local.set({ [KEYS.profile]: profile })
+  await storageSet({ [KEYS.profile]: profile })
 }
 
 // --- Cloud LLM profiles ---
 
 export async function getLLMProfiles(): Promise<LLMProfile[]> {
-  const result = await chrome.storage.local.get(KEYS.llmProfiles)
+  const result = await storageGet(KEYS.llmProfiles)
   return result[KEYS.llmProfiles] ?? []
 }
 
 export async function saveLLMProfiles(profiles: LLMProfile[]): Promise<void> {
-  await chrome.storage.local.set({ [KEYS.llmProfiles]: profiles })
+  await storageSet({ [KEYS.llmProfiles]: profiles })
 }
 
 export async function getActiveProfileId(): Promise<string | null> {
-  const result = await chrome.storage.local.get(KEYS.activeProfileId)
+  const result = await storageGet(KEYS.activeProfileId)
   return result[KEYS.activeProfileId] ?? null
 }
 
 export async function setActiveProfileId(id: string | null): Promise<void> {
-  await chrome.storage.local.set({ [KEYS.activeProfileId]: id })
+  await storageSet({ [KEYS.activeProfileId]: id })
 }
 
 // Migrate legacy single LLMConfig + customPrompt into a named profile.
@@ -83,7 +96,7 @@ export async function getLLMConfig(): Promise<LLMConfig | null> {
 export async function getCustomPrompt(backend?: LLMBackend): Promise<string> {
   if (backend === 'chrome-prompt') {
     const key = KEYS.customPromptChrome
-    const result = await chrome.storage.local.get(key)
+    const result = await storageGet(key)
     return result[key] ?? ''
   }
 
@@ -95,13 +108,13 @@ export async function getCustomPrompt(backend?: LLMBackend): Promise<string> {
   }
 
   const key = KEYS.customPrompt
-  const result = await chrome.storage.local.get(key)
+  const result = await storageGet(key)
   return result[key] ?? ''
 }
 
 export async function saveCustomPrompt(prompt: string, backend?: LLMBackend): Promise<void> {
   if (backend === 'chrome-prompt') {
-    await chrome.storage.local.set({ [KEYS.customPromptChrome]: prompt })
+    await storageSet({ [KEYS.customPromptChrome]: prompt })
     return
   }
 
@@ -114,17 +127,17 @@ export async function saveCustomPrompt(prompt: string, backend?: LLMBackend): Pr
     await saveLLMProfiles(profiles)
   }
 
-  await chrome.storage.local.set({ [KEYS.customPrompt]: prompt })
+  await storageSet({ [KEYS.customPrompt]: prompt })
 }
 
 // Raw legacy access — used by migration only.
 async function getLLMConfigRaw(): Promise<LLMConfig | null> {
-  const result = await chrome.storage.local.get(KEYS.llmConfig)
+  const result = await storageGet(KEYS.llmConfig)
   return result[KEYS.llmConfig] ?? null
 }
 
 // Keep for backwards compat — writes to legacy key too so old code paths
 // that haven't migrated yet still work.
 export async function saveLLMConfig(config: LLMConfig): Promise<void> {
-  await chrome.storage.local.set({ [KEYS.llmConfig]: config })
+  await storageSet({ [KEYS.llmConfig]: config })
 }

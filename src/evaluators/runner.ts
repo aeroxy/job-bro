@@ -235,7 +235,7 @@ export async function runAllEvaluators(
   // with whatever cards succeeded (reasoning falls back to buildReasoning).
   if (!(ok('job_fit') && ok('salary') && ok('preference') && ok('risk') && ok('growth'))) {
     onProgress?.('summary', 'blocked')
-    return aggregate(job, evaluators)
+    return aggregate(job, evaluators, undefined, undefined, true)
   }
 
   // Summary runs tool-free (summaryTools is empty), which also lets it use the
@@ -251,6 +251,6 @@ export async function runAllEvaluators(
     if ((e as Error).name === 'AbortError') throw e
     console.error('[evaluator:summary] failed:', e)
     onProgress?.('summary', 'error')
-    return aggregate(job, evaluators)
+    return aggregate(job, evaluators, undefined, undefined, true)
   }
 }

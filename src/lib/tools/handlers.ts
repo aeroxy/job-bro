@@ -1,13 +1,22 @@
-// Tool handlers — must run in the service worker (fetch + manage offscreen).
-// Each handler fetches the target URL, hands HTML to the offscreen document
-// for DOM parsing + Turndown, and returns the resulting markdown. The parse
-// pipeline lives in src/lib/html-to-markdown.ts.
+// Tool handlers — run in whichever context owns the analysis orchestration.
+// In the service worker they message the offscreen for PARSE_HTML; in the
+// offscreen they call parseHtmlToMarkdown directly (no round-trip needed).
+// Each handler fetches the target URL, parses to markdown, and returns the
+// result. The parse pipeline lives in src/lib/html-to-markdown.ts.
 
+import { parseHtmlToMarkdown } from '@/lib/html-to-markdown'
 import type { ToolHandlerContext } from './types'
 
 const FETCH_TIMEOUT_MS = 20_000
 
+// Detect whether we're running inside the offscreen document. The offscreen
+// has DOMParser and can parse HTML directly; the service worker doesn't.
+const IS_OFFSCREEN = typeof DOMParser !== 'undefined'
+
 async function parseViaOffscreen(html: string): Promise<string> {
+  if (IS_OFFSCREEN) {
+    return parseHtmlToMarkdown(html).markdown
+  }
   const res: { markdown?: string; trimmed?: boolean } = await chrome.runtime.sendMessage({
     type: 'PARSE_HTML',
     html,
@@ -41,13 +50,19 @@ function isDdgBotChallenge(html: string): boolean {
 
 // Open the DDG search URL in a tab so the user can clear the challenge. Reuse
 // an existing html.duckduckgo.com tab instead of stacking new ones on retries.
+// Falls back to messaging the background when chrome.tabs is unavailable
+// (e.g. running inside the offscreen document).
 async function openDdgChallengeTab(url: string): Promise<void> {
-  const existing = await chrome.tabs.query({ url: 'https://html.duckduckgo.com/*' })
-  const tabId = existing[0]?.id
-  if (tabId != null) {
-    await chrome.tabs.update(tabId, { active: true, url })
+  if (typeof chrome.tabs?.query === 'function') {
+    const existing = await chrome.tabs.query({ url: 'https://html.duckduckgo.com/*' })
+    const tabId = existing[0]?.id
+    if (tabId != null) {
+      await chrome.tabs.update(tabId, { active: true, url })
+    } else {
+      await chrome.tabs.create({ url, active: true })
+    }
   } else {
-    await chrome.tabs.create({ url, active: true })
+    chrome.runtime.sendMessage({ type: 'OPEN_DDGC_CHALLENGE_TAB', url }).catch(() => {})
   }
 }
 

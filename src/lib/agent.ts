@@ -13,10 +13,12 @@ import type { LLMConfig } from '@/types/profile'
 import type { ToolCall, ToolDefinition } from './tools/types'
 import { webSearch, readPage } from './tools/handlers'
 
-// 3 tool-use rounds, then the model must produce a final answer. Empirically,
-// a run that hasn't converged in 3 rounds won't converge in 8 — so the higher
-// cap just burns tokens/latency on a doomed run before failing anyway.
-export const MAX_AGENT_ITERATIONS = 3
+// Hard cap on the agent loop to prevent runaway.
+export const MAX_AGENT_ITERATIONS = 10
+// After this many rounds, tools are disabled — the model must produce a
+// final content message. Gives the agent time to research, then forces it
+// to answer instead of looping forever.
+const MAX_TOOL_ROUNDS = 5
 
 export type ToolExecutor = (call: ToolCall, signal?: AbortSignal) => Promise<string>
 
@@ -139,7 +141,11 @@ export async function runAgent(
     if (signal?.aborted) {
       throw new DOMException('Agent aborted', 'AbortError')
     }
-    const response = await chatCompletionWithTools(config, working, { tools, signal, jsonSchema })
+    // After MAX_TOOL_ROUNDS, strip tools so the model is forced to produce
+    // a final content message instead of continuing to call tools. Still up
+    // to MAX_AGENT_ITERATIONS total iterations are available for retries.
+    const activeTools = i < MAX_TOOL_ROUNDS ? tools : []
+    const response = await chatCompletionWithTools(config, working, { tools: activeTools, signal, jsonSchema })
 
     if (!response.tool_calls?.length) {
       return { content: response.content, messages: working }
