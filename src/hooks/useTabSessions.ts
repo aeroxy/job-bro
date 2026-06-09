@@ -428,7 +428,8 @@ export function useTabSessions(
 
       const wasInterrupted =
         !activeSiblingSession &&
-        (persisted.status === 'analyzing' || persisted.status === 'extracting')
+        (persisted.status === 'analyzing' || persisted.status === 'extracting') &&
+        !persisted.report
 
       if (activeSiblingSession) {
         updateSessionAndRender(tabId, {
@@ -1241,16 +1242,20 @@ export function useTabSessions(
     }
   }, [syncTab])
 
-  // Manual re-sync of the active tab. The syncTab fast-path skips reloading
-  // when hydratedJobId already matches the URL's job, so a run that finished
-  // in the background after an empty hydration stays invisible until a tab
-  // switch. Clearing the guard forces syncTab to re-read from IDB. No-op while
-  // a run is in flight here — that state is already live and authoritative.
+  // Manual re-sync of the active tab. Clears the hydratedJobId guard so
+  // syncTab re-reads from IDB — picks up results from a background run that
+  // completed while the sidepanel's listener was not active.
   const refresh = useCallback(() => {
     const tabId = activeTabIdRef.current
     if (!tabId) return
     const session = sessionsRef.current.get(tabId)
-    if (session?.status === 'analyzing' || session?.status === 'extracting') return
+    // Abort any in-flight local work so syncTab's result isn't overwritten
+    // by a stale controller's callback.
+    localAnalysisControllersRef.current.get(tabId)?.abort(new DOMException('Manual refresh', 'AbortError'))
+    localAnalysisControllersRef.current.delete(tabId)
+    localResumeControllersRef.current.get(tabId)?.abort(new DOMException('Manual refresh', 'AbortError'))
+    localResumeControllersRef.current.delete(tabId)
+    cancelledRef.current.add(tabId)
     if (session) {
       sessionsRef.current.set(tabId, { ...session, hydratedJobId: null })
     }
