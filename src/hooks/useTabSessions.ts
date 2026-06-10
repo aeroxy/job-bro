@@ -897,16 +897,24 @@ export function useTabSessions(
     const controller = new AbortController()
     localAnalysisControllersRef.current.set(tabId, controller)
 
-    // Fire-and-forget: the background persists results to IDB and broadcasts
-    // ANALYSIS_COMPLETE, which the completion listener above folds into state
-    // AND clears the job-level locks. We don't await the response because the
-    // service worker can die mid-work, destroying the message channel; the
-    // sendMessage rejection is swallowed so it doesn't surface as an error.
     chrome.runtime.sendMessage({
       type: 'ANALYZE_JD',
       tabId,
       payload: { job: extractedJob, priorResults },
-    }).catch(() => {})
+    }).catch((e) => {
+      console.error('[Job Bro] Failed to dispatch ANALYZE_JD to background:', e)
+      updateSessionAndRender(tabId, {
+        status: 'error',
+        error: `Failed to start analysis: ${(e as Error).message}`,
+      })
+      const jobId = extractedJob.job_id
+      if (jobId) {
+        analysisPromisesRef.current.delete(jobId)
+        if (analysisOwnerTabRef.current.get(jobId) === tabId) {
+          analysisOwnerTabRef.current.delete(jobId)
+        }
+      }
+    })
 
     // The actual result arrives via the ANALYSIS_COMPLETE broadcast listener.
     // Returning null here; the analyze() caller doesn't use the return value
