@@ -275,13 +275,13 @@ async function handleAnalyzeOffscreen(
     const ok = result.ok
     broadcast({
       type: 'ANALYSIS_COMPLETE',
-      payload: { tabId, ok, ...(ok ? { report: result.report } : { error: result.error }) },
+      payload: { tabId, jobId: job.job_id, ok, ...(ok ? { report: result.report } : { error: result.error }) },
     })
   } catch (e) {
     if ((e as Error).name === 'AbortError') return
     if (signal.aborted || analysisControllers.get(tabId) !== controller) return
     analysisControllers.delete(tabId)
-    broadcast({ type: 'ANALYSIS_COMPLETE', payload: { tabId, ok: false, error: (e as Error).message } })
+    broadcast({ type: 'ANALYSIS_COMPLETE', payload: { tabId, jobId: job.job_id, ok: false, error: (e as Error).message } })
   }
 }
 

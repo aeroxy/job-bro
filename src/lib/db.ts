@@ -37,6 +37,7 @@ export interface PersistedSession {
   updatedAt: number
   status?: PersistedAnalysisStatus
   progress?: PersistedEvaluatorProgress
+  error?: string
 }
 
 interface JobBroDB extends DBSchema {
@@ -142,20 +143,31 @@ export async function clearSessions(): Promise<void> {
   await db.clear('sessions')
 }
 
+// In-flight analysis should finish within an hour. Anything older with no
+// report is abandoned (crashed, missed broadcast, pre-fix orphan) and safe
+// to prune.
+export const STALE_IN_FLIGHT_MS = 60 * 60 * 1000
+
 // Delete sessions that were extracted but never produced a report — analyses
-// that errored out, were cancelled, or where the user only ran extract. These
-// are pure scratch and don't appear in the History view. Returns the number
-// of records deleted.
+// that errored out, were cancelled, or where the user only ran extract. Also
+// prunes sessions stuck in 'analyzing'/'extracting' past the staleness
+// threshold. Returns the number of records deleted.
 export async function pruneOrphanSessions(): Promise<number> {
   const db = await getDB()
   const tx = db.transaction('sessions', 'readwrite')
   const store = tx.objectStore('sessions')
+  const now = Date.now()
   let count = 0
   let cursor = await store.openCursor()
   while (cursor) {
-    if (cursor.value.report === null && cursor.value.status !== 'analyzing' && cursor.value.status !== 'extracting') {
-      await cursor.delete()
-      count++
+    const s = cursor.value
+    if (s.report === null) {
+      const inFlight = s.status === 'analyzing' || s.status === 'extracting'
+      const stale = inFlight && (now - s.updatedAt) > STALE_IN_FLIGHT_MS
+      if (!inFlight || stale) {
+        await cursor.delete()
+        count++
+      }
     }
     cursor = await cursor.continue()
   }

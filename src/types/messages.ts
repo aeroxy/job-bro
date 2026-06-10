@@ -150,6 +150,7 @@ export type AnalysisCompleteMessage = {
   type: 'ANALYSIS_COMPLETE'
   payload: {
     tabId: number
+    jobId: string
     ok: boolean
     report?: AggregatedReport
     error?: string

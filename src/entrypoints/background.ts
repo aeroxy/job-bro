@@ -120,15 +120,17 @@ export default defineBackground(() => {
 
   // Persist results to IDB when the offscreen broadcasts completion events.
   chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
-    if (message?.type === 'ANALYSIS_COMPLETE' && message.payload?.ok && message.payload.report) {
-      const report = message.payload.report as AggregatedReport
-      const jobId = report.job?.job_id
+    if (message?.type === 'ANALYSIS_COMPLETE') {
+      const jobId = message.payload.jobId as string | undefined
       if (jobId) {
+        const ok = message.payload.ok as boolean
         getSessionByJobId(jobId).then((existing) => {
-          if (existing) {
-            // Derive progress from the report itself instead of trusting the
-            // last-persisted snapshot, which is typically stale (only saved
-            // at certain checkpoints, not on every progress event).
+          if (!existing) {
+            console.warn('[Job Bro] ANALYSIS_COMPLETE for unknown jobId; skipping IDB persist (sidepanel persistSession should cover this).', jobId)
+            return
+          }
+          if (ok && message.payload.report) {
+            const report = message.payload.report as AggregatedReport
             const finalProgress = deriveFinalProgress(report)
             saveSession({
               ...existing,
@@ -136,9 +138,16 @@ export default defineBackground(() => {
               progress: finalProgress,
               updatedAt: Date.now(),
               status: 'done',
+              error: undefined,
             }).catch((e) => console.error('[Job Bro] Failed to save session on ANALYSIS_COMPLETE:', e))
           } else {
-            console.warn('[Job Bro] ANALYSIS_COMPLETE for unknown jobId; skipping IDB persist (sidepanel persistSession should cover this).', jobId)
+            const error = (message.payload.error as string | undefined) ?? 'Analysis failed'
+            saveSession({
+              ...existing,
+              updatedAt: Date.now(),
+              status: 'error',
+              error,
+            }).catch((e) => console.error('[Job Bro] Failed to save session on ANALYSIS_COMPLETE:', e))
           }
         }).catch((e) => console.error('[Job Bro] Failed to get session on ANALYSIS_COMPLETE:', e))
       }
@@ -215,14 +224,14 @@ export default defineBackground(() => {
             console.error('[Job Bro] Failed to relay ANALYZE_JD to offscreen:', e)
             safeBroadcast({
               type: 'ANALYSIS_COMPLETE',
-              payload: { tabId: message.tabId, ok: false, error: `Relay failed: ${(e as Error).message}` },
+              payload: { tabId: message.tabId, jobId: message.payload.job.job_id, ok: false, error: `Relay failed: ${(e as Error).message}` },
             })
           })
         }).catch((e) => {
           console.error('[Job Bro] Failed to ensure offscreen for analysis:', e)
           safeBroadcast({
             type: 'ANALYSIS_COMPLETE',
-            payload: { tabId: message.tabId, ok: false, error: `Offscreen unavailable: ${(e as Error).message}` },
+            payload: { tabId: message.tabId, jobId: message.payload.job.job_id, ok: false, error: `Offscreen unavailable: ${(e as Error).message}` },
           })
         })
         return false

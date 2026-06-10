@@ -10,6 +10,7 @@ import {
   listSessions,
   pruneOrphanSessions,
   saveSession,
+  STALE_IN_FLIGHT_MS,
 } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
 
@@ -72,9 +73,12 @@ export function useHistory() {
     setLoading(true)
     const [analyses, sessions] = await Promise.all([listAnalyses(), listSessions()])
     setRecords(analyses)
-    setOrphanCount(sessions.filter((s) =>
-      s.report === null && s.status !== 'analyzing' && s.status !== 'extracting'
-    ).length)
+    const now = Date.now()
+    setOrphanCount(sessions.filter((s) => {
+      if (s.report !== null) return false
+      const inFlight = s.status === 'analyzing' || s.status === 'extracting'
+      return !inFlight || (now - s.updatedAt) > STALE_IN_FLIGHT_MS
+    }).length)
     setLoading(false)
   }, [])
 

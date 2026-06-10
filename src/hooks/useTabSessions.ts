@@ -342,6 +342,7 @@ export function useTabSessions(
       // 'hydrating' is a transient UI state, never useful to persist
       status: s.status === 'hydrating' ? 'idle' : s.status,
       progress: s.progress,
+      error: s.error ?? undefined,
     })
   }, [])
 
@@ -450,6 +451,11 @@ export function useTabSessions(
         (persisted.status === 'analyzing' || persisted.status === 'extracting') &&
         !persisted.report
 
+      const wasFailed =
+        !activeSiblingSession &&
+        persisted.status === 'error' &&
+        !persisted.report
+
       if (activeSiblingSession) {
         updateSessionAndRender(tabId, {
           hydratedJobId: jobId,
@@ -475,25 +481,19 @@ export function useTabSessions(
           resumeMarkdown: persisted.resumeMarkdown,
           resumeSummary: persisted.resumeSummary,
           resumeStatus: (persisted.resumeMarkdown ? 'done' : 'idle') as ResumeStatus,
-          status: (wasInterrupted ? 'error' : persisted.report ? 'done' : 'idle') as AnalysisStatus,
-          // For a finished run, prefer the persisted per-evaluator progress so
-          // a failed evaluator keeps its 'error' pill on reopen — forcing
-          // COMPLETED_PROGRESS would flip it to 'done'. Older records (saved
-          // before progress was persisted) fall back to COMPLETED_PROGRESS.
-          // Interrupted runs reset to INITIAL_PROGRESS so a killed-mid-run
-          // 'running' entry doesn't show a misleading live spinner.
-          progress: wasInterrupted
+          status: (wasInterrupted || wasFailed ? 'error' : persisted.report ? 'done' : 'idle') as AnalysisStatus,
+          progress: (wasInterrupted || wasFailed)
             ? { ...INITIAL_PROGRESS }
             : persisted.report
               ? (persisted.progress ? { ...persisted.progress } : { ...COMPLETED_PROGRESS })
               : { ...INITIAL_PROGRESS },
           activity: {},
-          // Reload is from a previous completed run — the report itself
-          // contains all evaluator results, so partials are redundant.
           evaluatorResults: {},
           error: wasInterrupted
             ? 'Previous analysis was interrupted. Click Analyze to retry.'
-            : null,
+            : wasFailed
+              ? (persisted.error ?? 'Analysis failed. Click Analyze to retry.')
+              : null,
         })
       }
     } catch (err) {
@@ -705,8 +705,7 @@ export function useTabSessions(
         // the offscreen is finished, so the dedup lock must drop even if the
         // sidepanel moved on (closed tab, navigated, reset). Fall back to the
         // report's embedded job when the session is gone.
-        const lockJobId = session?.job?.job_id
-          ?? (message.payload.ok ? message.payload.report?.job?.job_id : undefined)
+        const lockJobId = session?.job?.job_id ?? message.payload.jobId
         if (lockJobId) {
           analysisPromisesRef.current.delete(lockJobId)
           if (analysisOwnerTabRef.current.get(lockJobId) === tabId) {
