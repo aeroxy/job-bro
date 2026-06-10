@@ -121,16 +121,18 @@ export default defineBackground(() => {
   // Persist results to IDB when the offscreen broadcasts completion events.
   chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     if (message?.type === 'ANALYSIS_COMPLETE') {
-      const jobId = message.payload.jobId as string | undefined
+      const payload = message.payload
+      if (!payload) return false
+      const jobId = payload.jobId as string | undefined
       if (jobId) {
-        const ok = message.payload.ok as boolean
+        const ok = payload.ok as boolean
         getSessionByJobId(jobId).then((existing) => {
           if (!existing) {
             console.warn('[Job Bro] ANALYSIS_COMPLETE for unknown jobId; skipping IDB persist (sidepanel persistSession should cover this).', jobId)
             return
           }
-          if (ok && message.payload.report) {
-            const report = message.payload.report as AggregatedReport
+          if (ok && payload.report) {
+            const report = payload.report as AggregatedReport
             const finalProgress = deriveFinalProgress(report)
             saveSession({
               ...existing,
@@ -141,7 +143,7 @@ export default defineBackground(() => {
               error: undefined,
             }).catch((e) => console.error('[Job Bro] Failed to save session on ANALYSIS_COMPLETE:', e))
           } else {
-            const error = (message.payload.error as string | undefined) ?? 'Analysis failed'
+            const error = (payload.error as string | undefined) ?? 'Analysis failed'
             saveSession({
               ...existing,
               updatedAt: Date.now(),
