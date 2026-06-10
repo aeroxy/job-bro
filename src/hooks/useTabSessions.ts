@@ -291,6 +291,18 @@ export function useTabSessions(
       localAnalysisControllersRef.current.delete(tId)
       chrome.runtime.sendMessage({ type: 'CANCEL_ANALYSIS', tabId: tId }).catch(() => {})
     }
+
+    // Release the job-level lock here too: remote runs defer this cleanup to
+    // the ANALYSIS_COMPLETE listener, but a user-initiated cancel won't see
+    // that broadcast (offscreen drops it once the controller is gone), so
+    // without this the next analyze() click for the same jobId would be
+    // de-duped against a stale in-flight promise and silently no-op.
+    if (jobId) {
+      analysisPromisesRef.current.delete(jobId)
+      if (toCancel.has(analysisOwnerTabRef.current.get(jobId) ?? -1)) {
+        analysisOwnerTabRef.current.delete(jobId)
+      }
+    }
   }, [])
 
   // Cancel the in-flight resume generation for a tab AND any sibling tabs
@@ -591,6 +603,10 @@ export function useTabSessions(
         // Clean up owner refs if this tab was the owner
         if (analysisOwnerTabRef.current.get(jobId) === tabId) {
           analysisOwnerTabRef.current.delete(jobId)
+          // Also drop the dedup promise — without this, a remote run whose
+          // owner tab closed would hold the lock until ANALYSIS_COMPLETE
+          // lands (or forever, if the offscreen never broadcasts).
+          analysisPromisesRef.current.delete(jobId)
         }
         if (resumeOwnerTabRef.current.get(jobId) === tabId) {
           resumeOwnerTabRef.current.delete(jobId)
@@ -684,6 +700,22 @@ export function useTabSessions(
       if (message.type === 'ANALYSIS_COMPLETE') {
         const { tabId } = message.payload
         const session = sessionsRef.current.get(tabId)
+
+        // Release remote-run locks regardless of the session's current state:
+        // the offscreen is finished, so the dedup lock must drop even if the
+        // sidepanel moved on (closed tab, navigated, reset). Fall back to the
+        // report's embedded job when the session is gone.
+        const lockJobId = session?.job?.job_id
+          ?? (message.payload.ok ? message.payload.report?.job?.job_id : undefined)
+        if (lockJobId) {
+          analysisPromisesRef.current.delete(lockJobId)
+          if (analysisOwnerTabRef.current.get(lockJobId) === tabId) {
+            analysisOwnerTabRef.current.delete(lockJobId)
+          }
+        }
+        localAnalysisControllersRef.current.delete(tabId)
+        cancelledRef.current.delete(tabId)
+
         if (!session || session.status !== 'analyzing') return
         if (message.payload.ok && message.payload.report) {
           updateSessionAndRender(tabId, { report: message.payload.report, status: 'done' })
@@ -841,6 +873,11 @@ export function useTabSessions(
   // Background-worker analysis dispatch for the cloud (HTTP) backend. The
   // worker fans out evaluators in parallel and broadcasts ANALYSIS_PROGRESS
   // messages, which a separate effect (above) folds into the session state.
+  // Job-level locks (analysisPromisesRef, analysisOwnerTabRef) and the local
+  // controller flag are retained until ANALYSIS_COMPLETE (or cancelAnalysis)
+  // — clearing them when sendMessage settles would release the dedup lock
+  // immediately, letting a sibling tab re-dispatch a duplicate run while the
+  // first is still working in the offscreen.
   const runRemoteAnalysis = useCallback(async (
     tabId: number,
     extractedJob: ExtractedJob,
@@ -853,25 +890,21 @@ export function useTabSessions(
     localAnalysisControllersRef.current.set(tabId, controller)
 
     // Fire-and-forget: the background persists results to IDB and broadcasts
-    // ANALYSIS_COMPLETE, which the completion listener above folds into state.
-    // We don't await the response because the service worker can die mid-work,
-    // destroying the message channel.
+    // ANALYSIS_COMPLETE, which the completion listener above folds into state
+    // AND clears the job-level locks. We don't await the response because the
+    // service worker can die mid-work, destroying the message channel; the
+    // sendMessage rejection is swallowed so it doesn't surface as an error.
     chrome.runtime.sendMessage({
       type: 'ANALYZE_JD',
       tabId,
       payload: { job: extractedJob, priorResults },
-    }).catch(() => {}).finally(() => {
-      cancelledRef.current.delete(tabId)
-      if (localAnalysisControllersRef.current.get(tabId) === controller) {
-        localAnalysisControllersRef.current.delete(tabId)
-      }
-    })
+    }).catch(() => {})
 
     // The actual result arrives via the ANALYSIS_COMPLETE broadcast listener.
     // Returning null here; the analyze() caller doesn't use the return value
     // for remote runs — the completion listener updates state directly.
     return null
-  }, [updateSessionAndRender])
+  }, [])
 
   const analyze = useCallback(async (extractedJob: ExtractedJob) => {
     const tabId = activeTabIdRef.current
@@ -882,6 +915,8 @@ export function useTabSessions(
       const existing = analysisPromisesRef.current.get(jobId)
       if (existing) return existing
     }
+
+    const isRemote = backendRef.current !== 'chrome-prompt'
 
     const run = (async () => {
       cancelledRef.current.delete(tabId)
@@ -904,22 +939,30 @@ export function useTabSessions(
         console.error('[Job Bro] Failed to persist initial analysis state:', e)
       }
 
-      return backendRef.current === 'chrome-prompt'
-        ? runLocalAnalysis(tabId, extractedJob)
-        : runRemoteAnalysis(tabId, extractedJob)
+      return isRemote
+        ? runRemoteAnalysis(tabId, extractedJob)
+        : runLocalAnalysis(tabId, extractedJob)
     })()
 
     if (jobId) {
       analysisPromisesRef.current.set(jobId, run)
       analysisOwnerTabRef.current.set(jobId, tabId)
-      run.finally(() => {
-        if (analysisPromisesRef.current.get(jobId) === run) {
-          analysisPromisesRef.current.delete(jobId)
-        }
-        if (analysisOwnerTabRef.current.get(jobId) === tabId) {
-          analysisOwnerTabRef.current.delete(jobId)
-        }
-      })
+      // Local backend: `run` resolves when the analysis actually finishes, so
+      // the .finally cleanup is correctly timed. Remote backend: `run`
+      // resolves the moment ANALYZE_JD is dispatched (runRemoteAnalysis
+      // returns null), which would release the dedup lock long before the
+      // offscreen finishes — those locks are cleared by the
+      // ANALYSIS_COMPLETE listener / cancelAnalysis instead.
+      if (!isRemote) {
+        run.finally(() => {
+          if (analysisPromisesRef.current.get(jobId) === run) {
+            analysisPromisesRef.current.delete(jobId)
+          }
+          if (analysisOwnerTabRef.current.get(jobId) === tabId) {
+            analysisOwnerTabRef.current.delete(jobId)
+          }
+        })
+      }
     }
 
     return run

@@ -1,7 +1,7 @@
 import { runChat } from '@/lib/llm-handlers'
 import type { ChatResponse, ExtractionResponse, Message } from '@/types/messages'
-import type { AggregatedReport } from '@/types/evaluation'
-import { getSessionByJobId, saveSession } from '@/lib/db'
+import type { AggregatedReport, EvaluatorStatus } from '@/types/evaluation'
+import { getSessionByJobId, saveSession, type PersistedEvaluatorProgress } from '@/lib/db'
 
 // Runs on every service-worker startup — confirms which build is live so a
 // stale (un-reloaded) worker is immediately obvious in the console.
@@ -9,6 +9,50 @@ console.log(`[Job Bro] service worker init — v${__VERSION__}, built ${__BUILD_
 
 const OFFSCREEN_URL = 'offscreen.html'
 const OFFSCREEN_REASONS: chrome.offscreen.Reason[] = [chrome.offscreen.Reason.DOM_PARSER]
+
+// Best-effort broadcast — wrapped so that even if sendMessage itself throws
+// (no listeners, port closed), the caller doesn't blow up on the catch path.
+function safeBroadcast(message: Record<string, unknown>): void {
+  try {
+    chrome.runtime.sendMessage(message).catch(() => {})
+  } catch {
+    /* no listeners or port closed */
+  }
+}
+
+// Derive the per-evaluator progress map from a completed report. Used when the
+// background persists ANALYSIS_COMPLETE — the existing session's `progress`
+// snapshot may be stale (it's only persisted on save points, not every
+// progress tick), so without this the rehydrated session would show
+// pending/running pills against a fully-completed report.
+function deriveFinalProgress(report: AggregatedReport): PersistedEvaluatorProgress {
+  const statusFor = (s: EvaluatorStatus<unknown>): PersistedEvaluatorProgress[keyof PersistedEvaluatorProgress] => {
+    if (s.status === 'fulfilled') return 'completed'
+    if (s.status === 'rejected') return 'error'
+    return 'blocked'
+  }
+  const ev = report.evaluators
+  const allFulfilled =
+    ev.job_fit.status === 'fulfilled' &&
+    ev.salary.status === 'fulfilled' &&
+    ev.preference.status === 'fulfilled' &&
+    ev.risk.status === 'fulfilled' &&
+    ev.growth.status === 'fulfilled'
+  // Summary lives outside `evaluators` — infer from the report: if any
+  // upstream is non-fulfilled, summary was 'blocked'; if all fulfilled and
+  // job_summary is set, it ran; otherwise it errored.
+  const summary: PersistedEvaluatorProgress[keyof PersistedEvaluatorProgress] = !allFulfilled
+    ? 'blocked'
+    : (report.job_summary ? 'completed' : 'error')
+  return {
+    job_fit: statusFor(ev.job_fit),
+    salary: statusFor(ev.salary),
+    preference: statusFor(ev.preference),
+    risk: statusFor(ev.risk),
+    growth: statusFor(ev.growth),
+    summary,
+  }
+}
 
 let offscreenReady: Promise<void> | null = null
 
@@ -77,13 +121,19 @@ export default defineBackground(() => {
   // Persist results to IDB when the offscreen broadcasts completion events.
   chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     if (message?.type === 'ANALYSIS_COMPLETE' && message.payload?.ok && message.payload.report) {
-      const jobId = message.payload.report.job_id as string | undefined
+      const report = message.payload.report as AggregatedReport
+      const jobId = report.job?.job_id
       if (jobId) {
         getSessionByJobId(jobId).then((existing) => {
           if (existing) {
+            // Derive progress from the report itself instead of trusting the
+            // last-persisted snapshot, which is typically stale (only saved
+            // at certain checkpoints, not on every progress event).
+            const finalProgress = deriveFinalProgress(report)
             saveSession({
               ...existing,
-              report: message.payload.report as AggregatedReport,
+              report,
+              progress: finalProgress,
               updatedAt: Date.now(),
               status: 'done',
             }).catch(() => {})
@@ -94,9 +144,26 @@ export default defineBackground(() => {
       }
     }
     if (message?.type === 'RESUME_COMPLETE' && message.payload?.ok) {
-      // Resume persistence is handled by the sidepanel's persistSession on
-      // receiving RESUME_COMPLETE. The background doesn't persist resume here
-      // because the completion message doesn't include jobId.
+      // Persist when the sidepanel is closed (or missed the broadcast) so the
+      // resume isn't lost. jobId now travels with the message, keyed off the
+      // ExtractedJob that started the run in the offscreen.
+      const jobId = message.payload.jobId as string | undefined
+      const markdown = message.payload.markdown as string | undefined
+      const summary = message.payload.summary as string | undefined
+      if (jobId) {
+        getSessionByJobId(jobId).then((existing) => {
+          if (existing) {
+            saveSession({
+              ...existing,
+              resumeMarkdown: markdown ?? existing.resumeMarkdown,
+              resumeSummary: summary ?? existing.resumeSummary,
+              updatedAt: Date.now(),
+            }).catch(() => {})
+          } else {
+            console.warn('[Job Bro] RESUME_COMPLETE for unknown jobId; skipping IDB persist.', jobId)
+          }
+        }).catch(() => {})
+      }
     }
     return false
   })
@@ -142,17 +209,49 @@ export default defineBackground(() => {
       // run and restarting.
       case 'ANALYZE_JD':
         ensureOffscreen().then(() => {
-          chrome.runtime.sendMessage({ ...message, type: 'OFFSCREEN_ANALYZE_JD' }).catch(() => {})
+          chrome.runtime.sendMessage({ ...message, type: 'OFFSCREEN_ANALYZE_JD' }).catch((e) => {
+            // Sidepanel is waiting on ANALYSIS_COMPLETE; without a failure
+            // broadcast it would hang on the spinner. Same below for resume.
+            console.error('[Job Bro] Failed to relay ANALYZE_JD to offscreen:', e)
+            safeBroadcast({
+              type: 'ANALYSIS_COMPLETE',
+              payload: { tabId: message.tabId, ok: false, error: `Relay failed: ${(e as Error).message}` },
+            })
+          })
         }).catch((e) => {
           console.error('[Job Bro] Failed to ensure offscreen for analysis:', e)
+          safeBroadcast({
+            type: 'ANALYSIS_COMPLETE',
+            payload: { tabId: message.tabId, ok: false, error: `Offscreen unavailable: ${(e as Error).message}` },
+          })
         })
         return false
 
       case 'GENERATE_RESUME':
         ensureOffscreen().then(() => {
-          chrome.runtime.sendMessage({ ...message, type: 'OFFSCREEN_GENERATE_RESUME' }).catch(() => {})
+          chrome.runtime.sendMessage({ ...message, type: 'OFFSCREEN_GENERATE_RESUME' }).catch((e) => {
+            console.error('[Job Bro] Failed to relay GENERATE_RESUME to offscreen:', e)
+            safeBroadcast({
+              type: 'RESUME_COMPLETE',
+              payload: {
+                tabId: message.tabId,
+                jobId: message.payload.job.job_id,
+                ok: false,
+                error: `Relay failed: ${(e as Error).message}`,
+              },
+            })
+          })
         }).catch((e) => {
           console.error('[Job Bro] Failed to ensure offscreen for resume:', e)
+          safeBroadcast({
+            type: 'RESUME_COMPLETE',
+            payload: {
+              tabId: message.tabId,
+              jobId: message.payload.job.job_id,
+              ok: false,
+              error: `Offscreen unavailable: ${(e as Error).message}`,
+            },
+          })
         })
         return false
 
