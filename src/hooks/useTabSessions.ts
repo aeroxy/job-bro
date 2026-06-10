@@ -727,6 +727,14 @@ export function useTabSessions(
       } else if (message.type === 'RESUME_COMPLETE') {
         const { tabId } = message.payload
         const session = sessionsRef.current.get(tabId)
+
+        const lockJobId = session?.job?.job_id ?? message.payload.jobId
+        if (lockJobId) {
+          if (resumeOwnerTabRef.current.get(lockJobId) === tabId) {
+            resumeOwnerTabRef.current.delete(lockJobId)
+          }
+        }
+
         if (!session || session.resumeStatus !== 'generating') return
         if (message.payload.ok) {
           updateSessionAndRender(tabId, {
@@ -1203,11 +1211,13 @@ export function useTabSessions(
 
     if (jobId) {
       resumeOwnerTabRef.current.set(jobId, tabId)
-      run.finally(() => {
-        if (resumeOwnerTabRef.current.get(jobId) === tabId) {
-          resumeOwnerTabRef.current.delete(jobId)
-        }
-      })
+      if (backendRef.current === 'chrome-prompt') {
+        run.finally(() => {
+          if (resumeOwnerTabRef.current.get(jobId) === tabId) {
+            resumeOwnerTabRef.current.delete(jobId)
+          }
+        })
+      }
     }
   }, [getSession, runResumeGeneration])
 
@@ -1248,11 +1258,13 @@ export function useTabSessions(
 
     if (jobId) {
       resumeOwnerTabRef.current.set(jobId, tabId)
-      run.finally(() => {
-        if (resumeOwnerTabRef.current.get(jobId) === tabId) {
-          resumeOwnerTabRef.current.delete(jobId)
-        }
-      })
+      if (backendRef.current === 'chrome-prompt') {
+        run.finally(() => {
+          if (resumeOwnerTabRef.current.get(jobId) === tabId) {
+            resumeOwnerTabRef.current.delete(jobId)
+          }
+        })
+      }
     }
   }, [getSession, runResumeGeneration])
 

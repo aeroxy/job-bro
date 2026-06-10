@@ -19,7 +19,10 @@ export function useActiveTab() {
           if (id != null) windowIdRef.current = id
           return id
         })
-        .catch(() => null)
+        .catch(() => {
+          windowIdPromiseRef.current = null
+          return null
+        })
     }
     return windowIdPromiseRef.current
   }, [])
