@@ -136,11 +136,11 @@ export default defineBackground(() => {
               progress: finalProgress,
               updatedAt: Date.now(),
               status: 'done',
-            }).catch(() => {})
+            }).catch((e) => console.error('[Job Bro] Failed to save session on ANALYSIS_COMPLETE:', e))
           } else {
             console.warn('[Job Bro] ANALYSIS_COMPLETE for unknown jobId; skipping IDB persist (sidepanel persistSession should cover this).', jobId)
           }
-        }).catch(() => {})
+        }).catch((e) => console.error('[Job Bro] Failed to get session on ANALYSIS_COMPLETE:', e))
       }
     }
     if (message?.type === 'RESUME_COMPLETE' && message.payload?.ok) {
