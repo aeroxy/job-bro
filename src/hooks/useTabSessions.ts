@@ -1325,11 +1325,11 @@ export function useTabSessions(
     const session = sessionsRef.current.get(tabId)
     console.log('[refresh] session', session ? { status: session.status, hydratedJobId: session.hydratedJobId, jobId: session.job?.job_id } : null)
     if (session) {
-      sessionsRef.current.set(tabId, { ...session, hydratedJobId: null })
+      updateSessionAndRender(tabId, { hydratedJobId: null })
     }
     console.log('[refresh] calling syncTab')
     syncTab(tabId)
-  }, [syncTab, getActiveTabId])
+  }, [syncTab, getActiveTabId, updateSessionAndRender])
 
   // Current session for the active tab
   const current = activeTabId ? getSession(activeTabId) : DEFAULT_SESSION
