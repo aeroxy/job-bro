@@ -266,15 +266,21 @@ async function handleAnalyzeOffscreen(
 
   try {
     const result = await runAnalysis(job, signal, onProgress, onToolCall, onEvaluatorResult, priorResults)
-    if (analysisControllers.get(tabId) === controller) analysisControllers.delete(tabId)
+    // Drop completions from aborted or superseded runs. runAnalysis catches
+    // AbortError internally and still returns a (mostly-rejected) report, so
+    // without this guard a cancelled run can broadcast a stale ANALYSIS_COMPLETE
+    // that overwrites the freshly started run's state in the sidepanel.
+    if (signal.aborted || analysisControllers.get(tabId) !== controller) return
+    analysisControllers.delete(tabId)
     const ok = result.ok
     broadcast({
       type: 'ANALYSIS_COMPLETE',
       payload: { tabId, ok, ...(ok ? { report: result.report } : { error: result.error }) },
     })
   } catch (e) {
-    if (analysisControllers.get(tabId) === controller) analysisControllers.delete(tabId)
     if ((e as Error).name === 'AbortError') return
+    if (signal.aborted || analysisControllers.get(tabId) !== controller) return
+    analysisControllers.delete(tabId)
     broadcast({ type: 'ANALYSIS_COMPLETE', payload: { tabId, ok: false, error: (e as Error).message } })
   }
 }
@@ -291,22 +297,28 @@ async function handleResumeOffscreen(
   resumeControllers.get(tabId)?.abort(new DOMException('New resume generation started', 'AbortError'))
   const controller = new AbortController()
   resumeControllers.set(tabId, controller)
+  const signal = controller.signal
 
   try {
-    const result = await runResume(job, analysisContext, previousResume, previousSummary, comment, qnaHistory, controller.signal)
-    if (resumeControllers.get(tabId) === controller) resumeControllers.delete(tabId)
+    const result = await runResume(job, analysisContext, previousResume, previousSummary, comment, qnaHistory, signal)
+    // Drop completions from aborted or superseded runs — see handleAnalyzeOffscreen.
+    if (signal.aborted || resumeControllers.get(tabId) !== controller) return
+    resumeControllers.delete(tabId)
     const ok = result.ok
     broadcast({
       type: 'RESUME_COMPLETE',
       payload: {
-        tabId, ok,
+        tabId,
+        jobId: job.job_id,
+        ok,
         ...(ok ? { markdown: result.markdown, summary: result.summary } : { error: result.error }),
       },
     })
   } catch (e) {
-    if (resumeControllers.get(tabId) === controller) resumeControllers.delete(tabId)
     if ((e as Error).name === 'AbortError') return
-    broadcast({ type: 'RESUME_COMPLETE', payload: { tabId, ok: false, error: (e as Error).message } })
+    if (signal.aborted || resumeControllers.get(tabId) !== controller) return
+    resumeControllers.delete(tabId)
+    broadcast({ type: 'RESUME_COMPLETE', payload: { tabId, jobId: job.job_id, ok: false, error: (e as Error).message } })
   }
 }
 

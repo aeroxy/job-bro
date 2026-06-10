@@ -158,10 +158,14 @@ export type AnalysisCompleteMessage = {
 
 // Background -> all: resume generation finished (broadcast).
 // Same pattern as AnalysisCompleteMessage — persist then broadcast.
+// jobId is carried so the background can persist resume completions when the
+// sidepanel is closed (or missed the broadcast); without it the background
+// has no key into the sessions store.
 export type ResumeCompleteMessage = {
   type: 'RESUME_COMPLETE'
   payload: {
     tabId: number
+    jobId: string
     ok: boolean
     markdown?: string
     summary?: string
