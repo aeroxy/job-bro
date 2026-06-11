@@ -1254,7 +1254,16 @@ export function useTabSessions(
           comment: comment.trim() || undefined,
           qnaHistory: session.qnaHistory,
         },
-      }).catch(() => {})
+      }).catch((e) => {
+        console.error('[Job Bro] Failed to dispatch GENERATE_RESUME (regenerate) to background:', e)
+        updateSessionAndRender(tabId, {
+          resumeStatus: 'error',
+          resumeError: `Failed to start resume regeneration: ${(e as Error).message}`,
+        })
+        if (job.job_id && resumeOwnerTabRef.current.get(job.job_id) === tabId) {
+          resumeOwnerTabRef.current.delete(job.job_id)
+        }
+      })
     }
 
     const run = runResumeGeneration(tabId, {
