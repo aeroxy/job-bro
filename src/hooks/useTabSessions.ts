@@ -100,6 +100,21 @@ const COMPLETED_PROGRESS: EvaluatorProgress = {
   summary: 'completed',
 }
 
+function deriveProgress(report: AggregatedReport): EvaluatorProgress {
+  const map = (s: { status: string }): EvaluatorProgress['job_fit'] =>
+    s.status === 'fulfilled' ? 'completed' : s.status === 'rejected' ? 'error' : 'blocked'
+  const ev = report.evaluators
+  const allOk = Object.values(ev).every((e) => e.status === 'fulfilled')
+  return {
+    job_fit: map(ev.job_fit),
+    salary: map(ev.salary),
+    preference: map(ev.preference),
+    risk: map(ev.risk),
+    growth: map(ev.growth),
+    summary: allOk && report.job_summary != null ? 'completed' : 'error',
+  }
+}
+
 interface TabSession {
   view: TabView
   status: AnalysisStatus
@@ -716,7 +731,7 @@ export function useTabSessions(
 
         if (!session || session.status !== 'analyzing') return
         if (message.payload.ok && message.payload.report) {
-          updateSessionAndRender(tabId, { report: message.payload.report, status: 'done' })
+          updateSessionAndRender(tabId, { report: message.payload.report, status: 'done', progress: deriveProgress(message.payload.report) })
           if (session.job) saveAnalysis(session.job, message.payload.report).catch(() => {})
           persistSession(tabId).catch(() => {})
         } else {
