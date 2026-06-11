@@ -10,7 +10,8 @@ import type { ToolHandlerContext } from './types'
 const FETCH_TIMEOUT_MS = 20_000
 
 // Detect whether we're running inside the offscreen document. The offscreen
-// has DOMParser and can parse HTML directly; the service worker doesn't.
+// has DOMParser available and can parse HTML directly; the service worker
+// routes through the offscreen via PARSE_HTML messages.
 const IS_OFFSCREEN = typeof DOMParser !== 'undefined'
 
 async function parseViaOffscreen(html: string): Promise<string> {
