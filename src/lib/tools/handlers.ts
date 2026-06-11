@@ -71,8 +71,7 @@ async function openDdgChallengeTab(url: string): Promise<void> {
       console.warn('[Job Bro] Failed to create tab directly:', e)
     }
   }
-    chrome.runtime.sendMessage({ type: 'OPEN_DDGC_CHALLENGE_TAB', url }).catch(() => {})
-  }
+  chrome.runtime.sendMessage({ type: 'OPEN_DDGC_CHALLENGE_TAB', url }).catch(() => {})
 }
 
 export async function webSearch(query: string, ctx: ToolHandlerContext = {}): Promise<string> {
