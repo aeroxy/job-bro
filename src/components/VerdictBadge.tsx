@@ -4,8 +4,8 @@ import type { Verdict } from '@/types/evaluation'
 type BadgeSize = 'default' | 'sm'
 
 interface VerdictBadgeProps {
-  verdict: Verdict
-  score: number
+  verdict?: Verdict
+  score?: number
   size?: BadgeSize
   className?: string
 }
@@ -32,6 +32,7 @@ const SIZE_STYLES: Record<BadgeSize, { badge: string; score: string; label: stri
 }
 
 export function VerdictBadge({ verdict, score, size = 'default', className }: VerdictBadgeProps) {
+  if (verdict == null || score == null) return null
   const styles = SIZE_STYLES[size]
   return (
     <div className={cn('flex items-center', styles.gap, className)}>

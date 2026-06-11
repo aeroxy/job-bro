@@ -95,8 +95,8 @@ export interface EvaluatorStatus<T> {
 export interface AggregatedReport {
   job: ExtractedJob
   evaluated_at: number
-  verdict: Verdict
-  overall_score: number
+  verdict?: Verdict
+  overall_score?: number
   job_summary?: string
   reasoning: string
   key_risks: string[]

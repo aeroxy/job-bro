@@ -220,14 +220,14 @@ export function aggregate(
   job_summary?: string,
   pipelineIncomplete = false
 ): AggregatedReport {
-  const overall_score = getScore(evaluators)
-  const verdict = getVerdict(overall_score, evaluators)
+  const overall_score = pipelineIncomplete ? undefined : getScore(evaluators)
+  const verdict = pipelineIncomplete ? undefined : getVerdict(overall_score!, evaluators)
   const hasFailedEvaluator = Object.values(evaluators).some((e) => e.status !== 'fulfilled')
   const reasoning = pipelineIncomplete
     ? (hasFailedEvaluator
       ? 'Analysis incomplete: one or more evaluators failed. Unable to generate summary reasoning.'
       : 'Analysis incomplete: unable to generate summary reasoning.')
-    : (reasoningOverride || buildReasoning(evaluators, verdict, overall_score))
+    : (reasoningOverride || buildReasoning(evaluators, verdict!, overall_score!))
   const key_risks = collectRisks(evaluators)
   const negotiation_tips = collectNegotiationTips(evaluators)
 

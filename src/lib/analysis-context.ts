@@ -2,7 +2,11 @@ import type { AggregatedReport } from '@/types/evaluation'
 
 export function formatAnalysisContext(report: AggregatedReport): string {
   const lines: string[] = []
-  lines.push(`Verdict: ${report.verdict} (score ${report.overall_score}/100)`)
+  if (report.verdict != null && report.overall_score != null) {
+    lines.push(`Verdict: ${report.verdict} (score ${report.overall_score}/100)`)
+  } else {
+    lines.push('Verdict: incomplete (some evaluators failed)')
+  }
   lines.push(`Overall reasoning: ${report.reasoning}`)
 
   const jf = report.evaluators.job_fit.result
