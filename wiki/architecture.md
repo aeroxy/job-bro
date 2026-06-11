@@ -91,12 +91,12 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `ANALYSIS_PROGRESS` | background → sidepanel | Per-evaluator status update |
 | `ANALYSIS_RESULT` | background → sidepanel | Final `AggregatedReport` (best-effort sendResponse) |
 | `ANALYSIS_ERROR` | background → sidepanel | Evaluator failure |
-| `ANALYSIS_COMPLETE` | background → all | Broadcast on analysis finish; persists report to IDB first |
+| `ANALYSIS_COMPLETE` | offscreen → all | Broadcast on analysis finish; background listener persists to IDB, sidepanel listener updates session state |
 | `GENERATE_RESUME` | sidepanel → background | Trigger resume generation (fire-and-forget; result via `RESUME_COMPLETE`) |
 | `CANCEL_RESUME` | sidepanel → background | Abort in-progress resume generation for a tab |
 | `RESUME_RESULT` | background → sidepanel | Markdown resume + changelog (best-effort sendResponse) |
 | `RESUME_ERROR` | background → sidepanel | Resume generation failure |
-| `RESUME_COMPLETE` | background → all | Broadcast on resume finish; persists result to IDB first |
+| `RESUME_COMPLETE` | offscreen → all | Broadcast on resume finish; background listener persists to IDB, sidepanel listener updates session state |
 | `CANCEL_ANALYSIS` | sidepanel → background | Abort in-progress analysis for a tab |
 | `CHAT_REQUEST` | sidepanel → background | Follow-up Q&A question |
 | `CHAT_RESPONSE` | background → sidepanel | Q&A answer |

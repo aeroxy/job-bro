@@ -40,7 +40,7 @@
    - Job description (Markdown)
    - Original resume + projects
    - AggregatedReport context (verdict, strengths, gaps)
-4. background persists result to IDB, broadcasts RESUME_COMPLETE → sidepanel
+4. offscreen broadcasts RESUME_COMPLETE; background persists to IDB, sidepanel updates state
 5. ResumeView renders Preview tab (marked → HTML) and Edit tab (raw Markdown)
 6. User optionally edits or types feedback → submits (Cmd+Enter)
 7. useResumeGenerator.regenerate(job, comment) → GENERATE_RESUME with:
