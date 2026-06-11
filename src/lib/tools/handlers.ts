@@ -54,14 +54,23 @@ function isDdgBotChallenge(html: string): boolean {
 // (e.g. running inside the offscreen document).
 async function openDdgChallengeTab(url: string): Promise<void> {
   if (typeof chrome.tabs?.query === 'function') {
-    const existing = await chrome.tabs.query({ url: 'https://html.duckduckgo.com/*' })
-    const tabId = existing[0]?.id
-    if (tabId != null) {
-      await chrome.tabs.update(tabId, { active: true, url })
-    } else {
-      await chrome.tabs.create({ url, active: true })
+    try {
+      const existing = await chrome.tabs.query({ url: 'https://html.duckduckgo.com/*' })
+      const tabId = existing[0]?.id
+      if (tabId != null) {
+        await chrome.tabs.update(tabId, { active: true, url })
+        return
+      }
+    } catch (e) {
+      console.warn('[Job Bro] Failed to query/update existing tab:', e)
     }
-  } else {
+    try {
+      await chrome.tabs.create({ url, active: true })
+      return
+    } catch (e) {
+      console.warn('[Job Bro] Failed to create tab directly:', e)
+    }
+  }
     chrome.runtime.sendMessage({ type: 'OPEN_DDGC_CHALLENGE_TAB', url }).catch(() => {})
   }
 }
