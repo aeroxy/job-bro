@@ -111,7 +111,9 @@ function deriveProgress(report: AggregatedReport): EvaluatorProgress {
     preference: map(ev.preference),
     risk: map(ev.risk),
     growth: map(ev.growth),
-    summary: allOk && report.job_summary != null ? 'completed' : 'error',
+    summary: allOk
+      ? (report.job_summary != null ? 'completed' : 'error')
+      : 'blocked',
   }
 }
 
@@ -916,7 +918,11 @@ export function useTabSessions(
       tabId,
       payload: { job: extractedJob, priorResults },
     }).catch((e) => {
+      if (localAnalysisControllersRef.current.get(tabId) !== controller) return
+      const session = sessionsRef.current.get(tabId)
+      if (session?.status !== 'analyzing') return
       console.error('[Job Bro] Failed to dispatch ANALYZE_JD to background:', e)
+      localAnalysisControllersRef.current.delete(tabId)
       updateSessionAndRender(tabId, {
         status: 'error',
         error: `Failed to start analysis: ${(e as Error).message}`,
@@ -935,7 +941,7 @@ export function useTabSessions(
     // Returning null here; the analyze() caller doesn't use the return value
     // for remote runs — the completion listener updates state directly.
     return null
-  }, [persistSession])
+  }, [updateSessionAndRender, persistSession])
 
   const analyze = useCallback(async (extractedJob: ExtractedJob) => {
     const tabId = activeTabIdRef.current
