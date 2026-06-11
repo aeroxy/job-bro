@@ -96,10 +96,12 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
   // The run has settled with at least one evaluator failed or blocked — offer
   // a Continue that re-runs the failed evaluators + everything depending on
   // them (reusing the successful results).
+  const failedEvaluators = Object.values(progress).filter((s) => s === 'error' || s === 'blocked').length
+  const summaryOnly = failedEvaluators === 1 && progress.summary === 'error'
   const canContinue =
     !analyzing &&
     !!onContinue &&
-    Object.values(progress).some((s) => s === 'error' || s === 'blocked')
+    failedEvaluators > 0
 
   return (
     <div className="space-y-3">
@@ -108,7 +110,9 @@ export function AnalysisReport({ report, progress, analyzing, job, qnaHistory, c
           <div className="flex items-start gap-2 min-w-0">
             <AlertTriangle className="size-3.5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
             <p className="text-xs text-amber-800 dark:text-amber-200">
-              An evaluator failed, so the steps depending on it were skipped. Continue to re-run them.
+              {summaryOnly
+                ? 'Summary generation failed. Continue to retry it.'
+                : 'An evaluator failed, so the steps depending on it were skipped. Continue to re-run them.'}
             </p>
           </div>
           <button

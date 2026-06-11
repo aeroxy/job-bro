@@ -5,7 +5,12 @@ export function formatAnalysisContext(report: AggregatedReport): string {
   if (report.verdict != null && report.overall_score != null) {
     lines.push(`Verdict: ${report.verdict} (score ${report.overall_score}/100)`)
   } else {
-    lines.push('Verdict: incomplete (some evaluators failed)')
+    const failed = Object.entries(report.evaluators)
+      .filter(([, e]) => e.status !== 'fulfilled')
+      .map(([name]) => name)
+    lines.push(failed.length
+      ? `Incomplete: evaluators failed — ${failed.join(', ')}`
+      : 'Incomplete: summary synthesis failed')
   }
   lines.push(`Overall reasoning: ${report.reasoning}`)
 
