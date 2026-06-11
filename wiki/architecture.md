@@ -87,7 +87,7 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `EXTRACT_JD` | background → content | Trigger DOM extraction |
 | `JD_EXTRACTED` | content → background | Returns `ExtractedJob` (includes `job_id`) |
 | `JD_EXTRACTION_FAILED` | content → background | Extraction error |
-| `ANALYZE_JD` | sidepanel → background | Start evaluators (fire-and-forget; result via `ANALYSIS_COMPLETE`) |
+| `ANALYZE_JD` | sidepanel → background → offscreen | Start evaluators (fire-and-forget; result via `ANALYSIS_COMPLETE`) |
 | `ANALYSIS_PROGRESS` | background → sidepanel | Per-evaluator status update |
 | `ANALYSIS_RESULT` | background → sidepanel | Final `AggregatedReport` (best-effort sendResponse) |
 | `ANALYSIS_ERROR` | background → sidepanel | Evaluator failure |
