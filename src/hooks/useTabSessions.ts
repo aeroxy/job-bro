@@ -712,7 +712,7 @@ export function useTabSessions(
   // service worker's message channel died mid-work.
   useEffect(() => {
     const listener = (message: AnalysisCompleteMessage | ResumeCompleteMessage) => {
-      if (!message || typeof message !== 'object') return
+      if (!message || typeof message !== 'object' || !('payload' in message) || !message.payload) return
       if (message.type === 'ANALYSIS_COMPLETE') {
         const { tabId } = message.payload
         const session = sessionsRef.current.get(tabId)
