@@ -162,11 +162,15 @@ export async function pruneOrphanSessions(): Promise<number> {
   while (cursor) {
     const s = cursor.value
     if (s.report === null) {
-      const inFlight = s.status === 'analyzing' || s.status === 'extracting'
-      const stale = inFlight && (now - s.updatedAt) > STALE_IN_FLIGHT_MS
-      if (!inFlight || stale) {
-        await cursor.delete()
-        count++
+      const hasResume = s.resumeMarkdown || s.resumeSummary
+      const hasChat = s.qnaHistory && s.qnaHistory.length > 0
+      if (!hasResume && !hasChat) {
+        const inFlight = s.status === 'analyzing' || s.status === 'extracting'
+        const stale = inFlight && (now - s.updatedAt) > STALE_IN_FLIGHT_MS
+        if (!inFlight || stale) {
+          await cursor.delete()
+          count++
+        }
       }
     }
     cursor = await cursor.continue()

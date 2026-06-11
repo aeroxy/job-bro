@@ -13,7 +13,7 @@ import type { ChatTurn } from '@/types/chat'
 import type { LLMConfig } from '@/types/profile'
 import type { AnalysisProgressMessage, AnalysisCompleteMessage, ResumeCompleteMessage } from '@/types/messages'
 import type { ToolCall } from '@/lib/tools/types'
-import { deleteSession, getSessionByJobId, saveSession } from '@/lib/db'
+import { deleteSession, getSessionByJobId, saveAnalysis, saveSession } from '@/lib/db'
 import { extractLinkedInJobId } from '@/extractor/linkedin'
 import { runAnalysis, runResume } from '@/lib/llm-handlers'
 import type { ResumeResult } from '@/lib/llm-handlers'
@@ -154,7 +154,6 @@ const DEFAULT_SESSION: TabSession = {
  */
 export function useTabSessions(
   activeTabId: number | null,
-  getActiveTabId: () => Promise<number | null>,
   onTabRemoved: Set<(tabId: number) => void>,
   llmConfig: LLMConfig,
 ) {
@@ -718,6 +717,7 @@ export function useTabSessions(
         if (!session || session.status !== 'analyzing') return
         if (message.payload.ok && message.payload.report) {
           updateSessionAndRender(tabId, { report: message.payload.report, status: 'done' })
+          if (session.job) saveAnalysis(session.job, message.payload.report).catch(() => {})
           persistSession(tabId).catch(() => {})
         } else {
           updateSessionAndRender(tabId, { error: message.payload.error || 'Analysis failed', status: 'error' })
@@ -906,6 +906,7 @@ export function useTabSessions(
         status: 'error',
         error: `Failed to start analysis: ${(e as Error).message}`,
       })
+      persistSession(tabId).catch(() => {})
       const jobId = extractedJob.job_id
       if (jobId) {
         analysisPromisesRef.current.delete(jobId)
@@ -919,7 +920,7 @@ export function useTabSessions(
     // Returning null here; the analyze() caller doesn't use the return value
     // for remote runs — the completion listener updates state directly.
     return null
-  }, [])
+  }, [persistSession])
 
   const analyze = useCallback(async (extractedJob: ExtractedJob) => {
     const tabId = activeTabIdRef.current
@@ -1327,19 +1328,6 @@ export function useTabSessions(
     }
   }, [syncTab])
 
-  const refresh = useCallback(async () => {
-    const tabId = activeTabIdRef.current ?? await getActiveTabId()
-    console.log('[refresh] tabId', tabId, 'activeTabIdRef', activeTabIdRef.current)
-    if (!tabId) return
-    const session = sessionsRef.current.get(tabId)
-    console.log('[refresh] session', session ? { status: session.status, hydratedJobId: session.hydratedJobId, jobId: session.job?.job_id } : null)
-    if (session) {
-      updateSessionAndRender(tabId, { hydratedJobId: null })
-    }
-    console.log('[refresh] calling syncTab')
-    syncTab(tabId)
-  }, [syncTab, getActiveTabId, updateSessionAndRender])
-
   // Current session for the active tab
   const current = activeTabId ? getSession(activeTabId) : DEFAULT_SESSION
 
@@ -1379,6 +1367,5 @@ export function useTabSessions(
     resetResume,
     // Session management
     invalidateHydration,
-    refresh,
   }
 }

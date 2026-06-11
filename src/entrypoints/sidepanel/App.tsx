@@ -51,7 +51,7 @@ export default function App() {
     selectLLMProfile,
   } = useProfile()
 
-  const { activeTabId, getActiveTabId, onTabRemoved } = useActiveTab()
+  const { activeTabId, onTabRemoved } = useActiveTab()
   const chromeAi = useChromeAiStatus()
 
   const {
@@ -81,10 +81,9 @@ export default function App() {
     setResumeMarkdown,
     resetResume,
     invalidateHydration,
-    refresh,
     activity,
     evaluatorResults,
-  } = useTabSessions(activeTabId, getActiveTabId, onTabRemoved, llmConfig)
+  } = useTabSessions(activeTabId, onTabRemoved, llmConfig)
 
   const handleRestore = useCallback((jobId: string) => {
     invalidateHydration(jobId)
@@ -232,17 +231,6 @@ export default function App() {
             <Settings className="size-3.5" />
           </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={refresh}
-          disabled={isWorking}
-          title="Refresh — reload this tab's analysis"
-          aria-label="Refresh analysis"
-          className="cursor-pointer"
-        >
-          <RefreshCw className="size-3.5" />
-        </Button>
       </header>
 
       {/* Content */}
