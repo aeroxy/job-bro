@@ -169,11 +169,11 @@ export default defineBackground(() => {
               resumeMarkdown: markdown ?? existing.resumeMarkdown,
               resumeSummary: summary ?? existing.resumeSummary,
               updatedAt: Date.now(),
-            }).catch(() => {})
+            }).catch((e) => console.error('[Job Bro] Failed to save session on RESUME_COMPLETE:', e))
           } else {
             console.warn('[Job Bro] RESUME_COMPLETE for unknown jobId; skipping IDB persist.', jobId)
           }
-        }).catch(() => {})
+        }).catch((e) => console.error('[Job Bro] Failed to get session on RESUME_COMPLETE:', e))
       }
     }
     return false
