@@ -360,7 +360,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false
   }
 
-  // PARSE_HTML — handled synchronously (DOMParser is fast, no queue needed).
+  // PARSE_HTML — handled synchronously (htmlparser2 is fast, no queue needed).
   if (message?.type === 'PARSE_HTML') {
     const req = message as ParseRequest
     try {

@@ -59,7 +59,7 @@ let offscreenReady: Promise<void> | null = null
 // Ensure the offscreen document exists. Idempotent — reuses the existing
 // document if one is already alive. The offscreen document runs the full
 // analysis/resume orchestration (no service worker lifetime limits), the
-// DOMParser + Turndown work, and Chrome AI sessions.
+// htmlparser2 + Turndown work, and Chrome AI sessions.
 async function ensureOffscreen(): Promise<void> {
   if (offscreenReady) {
     try { await offscreenReady } catch { offscreenReady = null }
