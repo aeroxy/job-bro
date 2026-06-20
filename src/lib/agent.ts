@@ -264,14 +264,28 @@ async function retry<T extends object>(
   // When the verdict tool is in play, the correction must go back through it
   // (the loop only accepts a tool call as a final answer). Otherwise fall
   // back to the plain-text "compact JSON" nudge.
-  const fixInstruction = verdictToolName
-    ? `${errorMessage}. Call \`${verdictToolName}\` with the corrected JSON.`
-    : `${errorMessage}. Fix it and output compact JSON only.`
-  const retryMessages: ChatMessage[] = [
-    ...history,
-    { role: 'assistant', content: badResponse },
-    { role: 'user', content: fixInstruction },
-  ]
+  let retryMessages: ChatMessage[]
+  if (verdictToolName) {
+    // Append a tool message to the verdict call so the model sees the
+    // validation error as a tool result — avoids the protocol violation of
+    // appending a plain-text assistant+user pair after unresolved tool calls.
+    const lastMessage = history[history.length - 1]
+    const verdictCall = lastMessage?.tool_calls?.find((c) => c.function.name === verdictToolName)
+    retryMessages = [
+      ...history,
+      {
+        role: 'tool',
+        tool_call_id: verdictCall?.id ?? 'verdict',
+        content: `${errorMessage}. Please call \`${verdictToolName}\` again with the corrected JSON.`,
+      } as ChatMessage,
+    ]
+  } else {
+    retryMessages = [
+      ...history,
+      { role: 'assistant', content: badResponse },
+      { role: 'user', content: `${errorMessage}. Fix it and output compact JSON only.` },
+    ]
+  }
   const { content: retryRaw } = await runAgent(config, retryMessages, { ...agentOpts, verdictToolName })
   // Re-validate the retry too — otherwise invalid-but-parseable JSON would slip
   // through and callers' Promise<T> contract (and downstream scoring) breaks.
