@@ -1,5 +1,9 @@
-import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, AlertCircle, RefreshCw, Key, Fingerprint } from 'lucide-react'
+import { useState, useEffect } from 'react'
+
+import { QwenIcon } from '@/components/icons/QwenIcon'
+import { getQwenToken, updateQwenCookies } from '@/lib/qwen/qwen-service'
+import { generateCookies } from '@/lib/qwen/cookie-generator'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -48,9 +52,53 @@ export function SettingsForm({
 
   const chromeAi = useChromeAiStatus()
   const backend: LLMBackend = config.backend ?? 'openai'
-  const isChrome = backend === 'chrome-prompt'
+  const providerMode: 'chrome' | 'api' | 'qwen-chat' =
+    backend === 'chrome-prompt' ? 'chrome' :
+    backend === 'qwen-chat' ? 'qwen-chat' : 'api'
 
-  const canSave = isChrome
+  // Qwen Chat States
+  const [qwenToken, setQwenToken] = useState<string | null>(null)
+  const [checkingQwenToken, setCheckingQwenToken] = useState(false)
+  const [updatingQwenFingerprint, setUpdatingQwenFingerprint] = useState(false)
+  const [qwenFingerprint, setQwenFingerprint] = useState('')
+
+  useEffect(() => {
+    if (providerMode === 'qwen-chat') {
+      handleCheckQwenToken()
+      // Generate initial fingerprint for display
+      try {
+        const cookies = generateCookies()
+        setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
+      } catch {}
+    }
+  }, [providerMode])
+
+  const handleCheckQwenToken = async () => {
+    setCheckingQwenToken(true)
+    try {
+      const activeToken = await getQwenToken()
+      setQwenToken(activeToken)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setCheckingQwenToken(false)
+    }
+  }
+
+  const handleUpdateQwenFingerprint = async () => {
+    setUpdatingQwenFingerprint(true)
+    try {
+      await updateQwenCookies()
+      const cookies = generateCookies()
+      setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setUpdatingQwenFingerprint(false)
+    }
+  }
+
+  const canSave = providerMode !== 'api'
     ? true
     : !!config.base_url.trim() && !!config.model.trim()
 
@@ -122,22 +170,30 @@ export function SettingsForm({
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         <div>
           <h3 className="text-xs font-semibold mb-3">LLM Backend</h3>
-          <div className="grid grid-cols-2 gap-2 mb-3">
+          <div className="grid grid-cols-3 gap-2 mb-3">
             <BackendOption
               icon={<Cloud className="size-3.5" />}
-              label="Cloud (HTTP)"
-              description="OpenAI-compatible API"
+              label="Cloud"
+              description="OpenAI API"
               selected={backend === 'openai'}
               disabled={false}
               onClick={() => setConfig((p) => ({ ...p, backend: 'openai' }))}
             />
             <BackendOption
               icon={<Cpu className="size-3.5" />}
-              label="Chrome built-in AI"
-              description="Gemini Nano, on-device"
+              label="Chrome"
+              description="Gemini Nano"
               selected={backend === 'chrome-prompt'}
               disabled={chromeAi.status === 'unavailable'}
               onClick={() => setConfig((p) => ({ ...p, backend: 'chrome-prompt' }))}
+            />
+            <BackendOption
+              icon={<QwenIcon className="size-3.5" />}
+              label="Qwen Chat"
+              description="Direct browser"
+              selected={backend === 'qwen-chat'}
+              disabled={false}
+              onClick={() => setConfig((p) => ({ ...p, backend: 'qwen-chat' }))}
             />
           </div>
 
@@ -148,7 +204,7 @@ export function SettingsForm({
               Model size ~4&nbsp;GB.
             </p>
           )}
-          {isChrome && chromeAi.status === 'downloadable' && (
+          {providerMode === 'chrome' && chromeAi.status === 'downloadable' && (
             <div className="border rounded-md p-2 text-[11px] space-y-1.5">
               <p className="text-muted-foreground">
                 Gemini Nano isn't downloaded yet. Click below to start the ~4 GB download.
@@ -164,7 +220,7 @@ export function SettingsForm({
               </Button>
             </div>
           )}
-          {isChrome && chromeAi.status === 'downloading' && (
+          {providerMode === 'chrome' && chromeAi.status === 'downloading' && (
             <div className="border rounded-md p-2 text-[11px] flex items-center gap-2">
               <Spinner className="size-3" />
               <span className="text-muted-foreground">
@@ -175,14 +231,71 @@ export function SettingsForm({
               </span>
             </div>
           )}
-          {isChrome && chromeAi.status === 'available' && (
+          {providerMode === 'chrome' && chromeAi.status === 'available' && (
             <p className="text-[10px] text-muted-foreground">
               Model: <span className="font-medium">Gemini Nano v3</span> · runs on-device, no network calls.
             </p>
           )}
+          {providerMode === 'qwen-chat' && (
+            <div className="space-y-3 pt-1">
+              <p className="text-[10px] text-muted-foreground leading-normal">
+                Uses your active browser session at <a href="https://chat.qwen.ai" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">chat.qwen.ai</a>. No API keys or external server proxy required!
+              </p>
+
+              {/* 1. Auth Status Row */}
+              <div className="border rounded-md p-2 bg-slate-50 dark:bg-slate-900/40 space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[9px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                    <Key className="size-3" /> Auth Status
+                  </span>
+                  <button
+                    onClick={handleCheckQwenToken}
+                    disabled={checkingQwenToken}
+                    className="text-[9px] text-blue-500 hover:underline cursor-pointer flex items-center gap-0.5"
+                  >
+                    <RefreshCw className={`size-2.5 ${checkingQwenToken ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5 pt-0.5">
+                  {qwenToken ? (
+                    <>
+                      <CheckCircle2 className="size-3.5 text-green-500 shrink-0" />
+                      <span className="font-medium text-green-600 dark:text-green-400">Authenticated (Qwen Session Active)</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle className="size-3.5 text-amber-500 shrink-0" />
+                      <span className="font-medium text-amber-600 dark:text-amber-400 text-left leading-normal">No active session. Please log in on Qwen.</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Fingerprint Generator Row */}
+              <div className="border rounded-md p-2 bg-slate-50 dark:bg-slate-900/40 space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[9px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                    <Fingerprint className="size-3" /> Fingerprint Generator
+                  </span>
+                  <button
+                    onClick={handleUpdateQwenFingerprint}
+                    disabled={updatingQwenFingerprint}
+                    className="text-[9px] text-blue-500 hover:underline cursor-pointer flex items-center gap-0.5"
+                  >
+                    <RefreshCw className={`size-2.5 ${updatingQwenFingerprint ? 'animate-spin' : ''}`} />
+                    Update
+                  </button>
+                </div>
+                <div className="font-mono text-[9px] p-1 bg-zinc-100 dark:bg-zinc-800 rounded-sm text-zinc-600 dark:text-zinc-400 truncate">
+                  {qwenFingerprint || 'Not generated yet'}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
-        {!isChrome && (
+        {providerMode === 'api' && (
           <div>
             <h3 className="text-xs font-semibold mb-3">Cloud LLM Profile</h3>
 
@@ -226,7 +339,7 @@ export function SettingsForm({
           </div>
         )}
 
-        {!isChrome && (
+        {providerMode === 'api' && (
           <div>
             <h3 className="text-xs font-semibold mb-3">Configuration</h3>
 
@@ -394,7 +507,7 @@ export function SettingsForm({
           </div>
         )}
 
-        {!isChrome && (
+        {providerMode === 'api' && (
           <>
             <div className="flex items-center justify-between border-t pt-3">
               <div>
@@ -447,11 +560,11 @@ export function SettingsForm({
             <h3 className="text-xs font-semibold">
               Custom System Prompt
               <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
-                ({isChrome ? 'Chrome built-in AI' : 'Cloud LLM'})
+                ({providerMode === 'chrome' ? 'Chrome built-in AI' : providerMode === 'qwen-chat' ? 'Qwen Chat' : 'Cloud LLM'})
               </span>
             </h3>
           </div>
-          {isChrome ? (
+          {providerMode === 'chrome' ? (
             <>
               <Textarea
                 placeholder="Optional: prepended to evaluator prompts when using Gemini Nano..."
@@ -467,7 +580,7 @@ export function SettingsForm({
           ) : (
             <>
               <Textarea
-                placeholder="Optional: prepended to evaluator prompts when using a cloud model..."
+                placeholder="Optional: prepended to evaluator prompts when using Qwen/cloud model..."
                 value={promptCloud}
                 onChange={(e) => setPromptCloud(e.target.value)}
                 className="min-h-20 text-xs"

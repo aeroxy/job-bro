@@ -14,7 +14,7 @@ export interface JobPreferences {
   years_of_experience: number
 }
 
-export type LLMBackend = 'openai' | 'chrome-prompt'
+export type LLMBackend = 'openai' | 'chrome-prompt' | 'qwen-chat'
 
 export interface LLMConfig {
   backend?: LLMBackend    // default: 'openai' (back-compat for existing configs)

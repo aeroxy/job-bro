@@ -1,4 +1,5 @@
 import { runChat } from '@/lib/llm-handlers'
+import { sendQwenChat } from '@/lib/qwen/qwen-service'
 import type { ChatResponse, ExtractionResponse, Message } from '@/types/messages'
 import type { AggregatedReport, EvaluatorStatus } from '@/types/evaluation'
 import { getSessionByJobId, saveSession, type PersistedEvaluatorProgress } from '@/lib/db'
@@ -105,6 +106,37 @@ async function hasOffscreenDocument(): Promise<boolean> {
 export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
+  // Register declarativeNetRequest session rules to spoof Qwen origin/referer
+  try {
+    chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [1],
+      addRules: [
+        {
+          id: 1,
+          priority: 1,
+          action: {
+            type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
+            requestHeaders: [
+              { header: 'origin', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'https://chat.qwen.ai' },
+              { header: 'referer', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'https://chat.qwen.ai/' },
+              { header: 'host', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'chat.qwen.ai' }
+            ]
+          },
+          condition: {
+            urlFilter: 'https://chat.qwen.ai/api/*',
+            resourceTypes: [chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST]
+          }
+        }
+      ]
+    }).then(() => {
+      console.log('[Job Bro] Qwen header spoofing net rules registered.');
+    }).catch((e) => {
+      console.error('[Job Bro] Failed to register Qwen net rules:', e);
+    });
+  } catch (e) {
+    console.error('[Job Bro] declarativeNetRequest not supported or failed:', e);
+  }
+
   ensureOffscreen().catch((e) => console.warn('[Job Bro] Offscreen create failed', e))
 
   chrome.runtime.onInstalled.addListener((details) => {
@@ -195,6 +227,19 @@ export default defineBackground(() => {
         sendResponse(undefined)
       })
       return true
+    }
+
+    if (message && (message as { type?: string }).type === 'QWEN_CHAT_REQUEST') {
+      const msgs = (message as any).messages;
+      sendQwenChat(msgs)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((e) => sendResponse({ ok: false, error: e.message }));
+      return true;
+    }
+
+    if (message && (message as { type?: string }).type === 'QWEN_PING') {
+      sendResponse({ ok: true });
+      return false;
     }
 
     // The offscreen document handles PARSE_HTML. Returning false here means
