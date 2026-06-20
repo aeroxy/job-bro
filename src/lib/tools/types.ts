@@ -1,8 +1,18 @@
 // Tool-calling protocol types — OpenAI-compatible.
 
-export interface ToolFunctionParameter {
-  type: 'string' | 'number' | 'boolean'
-  description: string
+// A JSON Schema fragment describing a tool's parameters. OpenAI's tool spec
+// allows arbitrary JSON Schema here (nested objects, arrays, enums), so this
+// is intentionally permissive — the evaluator verdict tools reuse the full
+// evaluator schemas (which have nested items/enums) as their parameters.
+export interface ToolParameterSchema {
+  type?: string
+  properties?: Record<string, unknown>
+  required?: string[]
+  additionalProperties?: boolean
+  items?: unknown
+  enum?: unknown[]
+  description?: string
+  [key: string]: unknown
 }
 
 export interface ToolDefinition {
@@ -10,11 +20,7 @@ export interface ToolDefinition {
   function: {
     name: string
     description: string
-    parameters: {
-      type: 'object'
-      properties: Record<string, ToolFunctionParameter>
-      required: string[]
-    }
+    parameters: ToolParameterSchema
   }
 }
 
