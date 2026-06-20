@@ -42,7 +42,8 @@ export interface AgentOptions {
   // When set, a tool with this name is treated as terminal: calling it ends
   // the loop and its arguments (a JSON string) become the returned content.
   // Survives MAX_TOOL_ROUNDS — after research tools are stripped, this tool
-  // remains and tool_choice:'required' forces the model to call it. Used by
+  // remains and the nudge loop handles forcing the model to submit via the
+  // provide_verdict tool while keeping tool_choice set to 'auto'. Used by
   // evaluators via the provide_verdict tool (see lib/tools/definitions.ts).
   verdictToolName?: string
 }

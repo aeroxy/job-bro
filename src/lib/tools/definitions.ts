@@ -53,8 +53,8 @@ export const ALL_TOOLS: ToolDefinition[] = [WEB_SEARCH_TOOL, READ_PAGE_TOOL]
 // it, the loop ends and the call's arguments become the parsed result.
 //
 // This tool survives past MAX_TOOL_ROUNDS (research tools are stripped after
-// 5 rounds, but provide_verdict remains, with tool_choice:'required' forcing
-// the call). The MAX_AGENT_ITERATIONS (10) ceiling still bounds the loop.
+// 5 rounds, but provide_verdict remains, with the nudge loop forcing the call
+// while keeping tool_choice set to 'auto'). The MAX_AGENT_ITERATIONS (10) ceiling still bounds the loop.
 export const VERDICT_TOOL_NAME = 'provide_verdict'
 
 export function buildVerdictTool(schema: JsonSchemaSpec): ToolDefinition {
