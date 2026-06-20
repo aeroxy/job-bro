@@ -1,27 +1,33 @@
-// @ts-nocheck
-// 导入指纹生成器
 import { generateFingerprint } from './fingerprint';
 
-// 自定义Base64字符表
+export interface CookieResult {
+    ssxmod_itna: string;
+    ssxmod_itna2: string;
+    timestamp: number;
+    rawData: string;
+    rawData2: string;
+}
+
+// Custom Base64 character table
 const CUSTOM_BASE64_CHARS = "DGi0YA7BemWnQjCl4_bR3f8SKIF9tUz/xhr2oEOgPpac=61ZqwTudLkM5vHyNXsVJ";
 
-// 哈希字段位置（这些字段需要随机生成）
+// Hash field indices (these fields require random generation)
 const HASH_FIELDS = {
-    16: 'split',  // 插件哈希（格式: count|hash，只替换hash部分）
-    17: 'full',   // Canvas指纹哈希
-    18: 'full',   // UserAgent哈希
-    31: 'full',   // UserAgent哈希2
-    34: 'full',   // 文档URL哈希
-    36: 'full'    // 文档属性哈希
+    16: 'split',  // Plugin hash (format: count|hash, only replace the hash part)
+    17: 'full',   // Canvas fingerprint hash
+    18: 'full',   // UserAgent hash
+    31: 'full',   // UserAgent hash2
+    34: 'full',   // Document URL hash
+    36: 'full'    // Document attributes hash
 };
 
-// ==================== LZW压缩算法 ====================
+// ==================== LZW Compression Algorithm ====================
 
-function lzwCompress(data, bits, charFunc) {
+function lzwCompress(data: string | null, bits: number, charFunc: Function): string {
     if (data == null) return '';
 
-    let dict = {};
-    let dictToCreate = {};
+    let dict: Record<string, number> = {};
+    let dictToCreate: Record<string, boolean> = {};
     let c = '';
     let wc = '';
     let w = '';
@@ -237,14 +243,14 @@ function lzwCompress(data, bits, charFunc) {
     return result.join('');
 }
 
-// ==================== 编码函数 ====================
+// ==================== Encoding Functions ====================
 
-function customEncode(data, urlSafe) {
+function customEncode(data: string | null, urlSafe: boolean): string {
     if (data == null) return '';
 
     const base64Chars = CUSTOM_BASE64_CHARS;
 
-    let compressed = lzwCompress(data, 6, function(index) {
+    let compressed = lzwCompress(data, 6, function(index: number) {
         return base64Chars.charAt(index);
     });
 
@@ -260,43 +266,45 @@ function customEncode(data, urlSafe) {
     return compressed;
 }
 
-// ==================== 辅助函数 ====================
+// ==================== Helper Functions ====================
 
-function randomHash() {
-    return Math.floor(Math.random() * 4294967296);
+function randomHash(): number {
+    const array = new Uint32Array(1);
+    crypto.getRandomValues(array);
+    return array[0];
 }
 
-function generateDeviceId() {
-    return Array.from({ length: 20 }, () =>
-        Math.floor(Math.random() * 16).toString(16)
-    ).join('');
+function generateDeviceId(): string {
+    const array = new Uint8Array(20);
+    crypto.getRandomValues(array);
+    return Array.from(array, (byte) => (byte & 15).toString(16)).join('');
 }
 
-// ==================== 数据解析和处理 ====================
+// ==================== Data Parsing and Processing ====================
 
-function parseRealData(realData) {
+function parseRealData(realData: string): string[] {
     const fields = realData.split('^');
     return fields;
 }
 
-function processFields(fields) {
-    const processed = [...fields];
+function processFields(fields: string[]): any[] {
+    const processed: any[] = [...fields];
     const currentTimestamp = Date.now();
 
-    // 替换哈希字段
+    // Replace hash fields
     for (const [index, type] of Object.entries(HASH_FIELDS)) {
         const idx = parseInt(index);
 
         if (type === 'split') {
-            // 字段16: 格式为 "count|hash"，只替换hash部分
+            // Field 16: Format is "count|hash", only replace the hash part
             const parts = processed[idx].split('|');
             if (parts.length === 2) {
                 processed[idx] = `${parts[0]}|${randomHash()}`;
             }
         } else if (type === 'full') {
-            // 完全替换为随机哈希
+            // Completely replace with random hash
             if (idx === 36) {
-                // 字段36: 文档属性哈希（10-100的随机整数）
+                // 字段36: Document attributes hash（10-100的随机整数）
                 processed[idx] = Math.floor(Math.random() * 91) + 10;
             } else {
                 processed[idx] = randomHash();
@@ -304,37 +312,37 @@ function processFields(fields) {
         }
     }
 
-    processed[33] = currentTimestamp;  // 字段33: 当前时间戳
+    processed[33] = currentTimestamp;  // Field 33: Current timestamp
 
     return processed;
 }
 
-// ==================== Cookie生成 ====================
+// ==================== Cookie Generation ====================
 
-function generateCookies(realData = null, fingerprintOptions = {}) {
-    // 使用传入的指纹或生成新的随机指纹
+function generateCookies(realData: string | null = null, fingerprintOptions: any = {}): CookieResult {
+    // Use passed fingerprint or generate a new random one
     const fingerprint = realData || generateFingerprint(fingerprintOptions);
 
-    // 解析指纹数据
+    // Parse fingerprint data
     const fields = parseRealData(fingerprint);
 
-    // 处理字段（随机化哈希，更新时间戳）
+    // Process fields (randomize hashes, update timestamp)
     const processedFields = processFields(fields);
 
-    // 生成 ssxmod_itna (37字段)
+    // Generate ssxmod_itna (37 fields)
     const ssxmod_itna_data = processedFields.join('^');
     const ssxmod_itna = '1-' + customEncode(ssxmod_itna_data, true);
 
-    // 生成 ssxmod_itna2 (18字段)
-    // 只使用: 字段0, 字段1, 字段23, 字段32, 字段33
+    // Generate ssxmod_itna2 (18 fields)
+    // Only use: Field 0, Field 1, Field 23, Field 32, Field 33
     const ssxmod_itna2_data = [
-        processedFields[0],   // 设备ID
-        processedFields[1],   // SDK版本
-        processedFields[23],  // 模式 (P/M)
-        0, '', 0, '', '', 0,  // 事件相关（P模式下为空）
+        processedFields[0],   // Device ID
+        processedFields[1],   // SDK version
+        processedFields[23],  // Mode (P/M)
+        0, '', 0, '', '', 0,  // Event related (empty under P mode)
         0, 0,
-        processedFields[32],  // 常量 (11)
-        processedFields[33],  // 当前时间戳
+        processedFields[32],  // Constant (11)
+        processedFields[33],  // Current timestamp
         0, 0, 0, 0, 0
     ].join('^');
     const ssxmod_itna2 = '1-' + customEncode(ssxmod_itna2_data, true);
@@ -348,19 +356,19 @@ function generateCookies(realData = null, fingerprintOptions = {}) {
     };
 }
 
-function generateBatch(count = 10, realData = null, fingerprintOptions = {}) {
-    const results = [];
+function generateBatch(count: number = 10, realData: string | null = null, fingerprintOptions: any = {}): CookieResult[] {
+    const results: CookieResult[] = [];
     for (let i = 0; i < count; i++) {
         results.push(generateCookies(realData, fingerprintOptions));
     }
     return results;
 }
 
-// ==================== 主程序 ====================
+// ==================== Main ====================
 
 
 
-// ==================== 导出 ====================
+// ==================== Exports ====================
 
 export {
     generateCookies,

@@ -124,7 +124,7 @@ export async function chatCompletion(
       }
       return resp.result;
     }
-    return sendQwenChat(messages as any);
+    return sendQwenChat(messages as any, options?.signal);
   }
 
   const queue = getQueue(config.base_url)

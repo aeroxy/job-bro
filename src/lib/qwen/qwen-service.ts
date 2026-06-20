@@ -1,5 +1,4 @@
-// @ts-nocheck
-import { generateCookies } from './cookie-generator';
+import { generateCookies, type CookieResult } from './cookie-generator';
 
 const QWEN_ORIGIN = 'https://chat.qwen.ai';
 
@@ -28,13 +27,14 @@ async function setCookie(name: string, value: string): Promise<void> {
       url: QWEN_ORIGIN,
       name: name,
       value: value,
-      domain: '.qwen.ai',
+      domain: 'chat.qwen.ai',
       path: '/',
       secure: true,
-      sameSite: 'no_restriction', // Allow cross-site extension access
+      sameSite: 'lax',
     });
   } catch (e) {
     console.error(`[Qwen Service] Failed to set cookie ${name}:`, e);
+    throw e;
   }
 }
 
@@ -88,15 +88,17 @@ export async function getQwenToken(): Promise<string | null> {
 /**
  * Generates and updates fresh ssxmod_itna security cookies
  */
-export async function updateQwenCookies(): Promise<void> {
+export async function updateQwenCookies(): Promise<CookieResult> {
   try {
     console.log('[Qwen Service] Generating fresh security cookies...');
     const result = generateCookies();
     await setCookie('ssxmod_itna', result.ssxmod_itna);
     await setCookie('ssxmod_itna2', result.ssxmod_itna2);
     console.log('[Qwen Service] Security cookies updated successfully!');
+    return result;
   } catch (e) {
     console.error('[Qwen Service] Failed to update security cookies:', e);
+    throw e;
   }
 }
 
@@ -199,14 +201,15 @@ function buildQwenMessagesPayload(messages: QwenMessage[]) {
  * Sends a non-streaming chat completions request to Qwen using local fetch with spoofed Origin/Referer.
  * Resolves to the final accumulated string (excluding thinking/search output).
  */
-export async function sendQwenChat(messages: QwenMessage[]): Promise<string> {
+export async function sendQwenChat(messages: QwenMessage[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     let fullContent = '';
     sendQwenChatStream(
       messages,
       (text) => { fullContent += text; },
       () => resolve(fullContent),
-      (err) => reject(new Error(err))
+      (err) => reject(new Error(err)),
+      signal
     );
   });
 }
@@ -218,9 +221,10 @@ export async function sendQwenChatStream(
   messages: QwenMessage[],
   onChunk: (text: string) => void,
   onDone: () => void,
-  onError: (err: string) => void
+  onError: (err: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
-  let keepAliveInterval: any;
+  let keepAliveInterval: ReturnType<typeof setInterval> | undefined;
 
   try {
     keepAliveInterval = setInterval(() => {
@@ -231,7 +235,10 @@ export async function sendQwenChatStream(
   } catch {}
 
   const cleanupHeartbeat = () => {
-    if (keepAliveInterval) clearInterval(keepAliveInterval);
+    if (keepAliveInterval) {
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = undefined;
+    }
   };
 
   const wrappedOnDone = () => {
@@ -243,6 +250,17 @@ export async function sendQwenChatStream(
     cleanupHeartbeat();
     onError(err);
   };
+
+  if (signal) {
+    if (signal.aborted) {
+      cleanupHeartbeat();
+      onError('Request aborted');
+      return;
+    }
+    signal.addEventListener('abort', () => {
+      cleanupHeartbeat();
+    });
+  }
 
   try {
     // 1. Refresh security cookies
@@ -282,6 +300,7 @@ export async function sendQwenChatStream(
     const response = await fetch(`${QWEN_ORIGIN}/api/v2/chat/completions?chat_id=${chatId}`, {
       method: 'POST',
       credentials: 'include', // Ensure cookies are sent
+      signal, // Thread the abort signal through
       headers: {
         'accept': 'text/event-stream',
         'content-type': 'application/json',

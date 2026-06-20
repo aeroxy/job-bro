@@ -1,5 +1,5 @@
 import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, AlertCircle, RefreshCw, Key, Fingerprint } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, ReactNode } from 'react'
 
 import { QwenIcon } from '@/components/icons/QwenIcon'
 import { getQwenToken, updateQwenCookies } from '@/lib/qwen/qwen-service'
@@ -67,7 +67,7 @@ export function SettingsForm({
       handleCheckQwenToken()
       // Generate initial fingerprint for display
       try {
-        const cookies = generateCookies()
+        const cookies = generateCookies() as any
         setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
       } catch {}
     }
@@ -89,7 +89,7 @@ export function SettingsForm({
     setUpdatingQwenFingerprint(true)
     try {
       await updateQwenCookies()
-      const cookies = generateCookies()
+      const cookies = generateCookies() as any
       setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
     } catch (e) {
       console.error(e)
@@ -609,7 +609,7 @@ export function SettingsForm({
 }
 
 interface BackendOptionProps {
-  icon: React.ReactNode
+  icon: ReactNode
   label: string
   description: string
   selected: boolean
