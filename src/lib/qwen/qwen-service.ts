@@ -376,6 +376,23 @@ export async function sendQwenChatStream(
       }
     }
 
+    // Flush decoder + leftover buffer. No-op for well-formed streams that
+    // ended on a `data: [DONE]\n` boundary (which the loop above handled).
+    buffer += decoder.decode();
+    const leftover = buffer.trim();
+    if (leftover && leftover.startsWith('data: ')) {
+      const dataStr = leftover.slice(6);
+      if (dataStr !== '[DONE]') {
+        try {
+          const chunkPayload = JSON.parse(dataStr);
+          const delta = chunkPayload?.choices?.[0]?.delta;
+          if (delta?.content) onChunk(delta.content);
+        } catch {
+          // Ignore — truncated final event.
+        }
+      }
+    }
+
     wrappedOnDone();
   } catch (e) {
     console.error('[Qwen Service] Exception in streaming execution:', e);
