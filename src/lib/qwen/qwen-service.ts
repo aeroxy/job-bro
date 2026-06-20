@@ -256,15 +256,10 @@ export async function sendQwenChatStream(
     onError(err);
   };
 
-  if (signal) {
-    if (signal.aborted) {
-      cleanupHeartbeat();
-      onError('Request aborted');
-      return;
-    }
-    signal.addEventListener('abort', () => {
-      cleanupHeartbeat();
-    });
+  if (signal && signal.aborted) {
+    cleanupHeartbeat();
+    onError('Request aborted');
+    return;
   }
 
   try {

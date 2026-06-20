@@ -1,5 +1,5 @@
 import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, AlertCircle, RefreshCw, Key, Fingerprint } from 'lucide-react'
-import { useState, useEffect, ReactNode } from 'react'
+import { useState, useEffect, useCallback, ReactNode } from 'react'
 
 import { QwenIcon } from '@/components/icons/QwenIcon'
 import { getQwenToken, updateQwenCookies } from '@/lib/qwen/qwen-service'
@@ -62,18 +62,7 @@ export function SettingsForm({
   const [updatingQwenFingerprint, setUpdatingQwenFingerprint] = useState(false)
   const [qwenFingerprint, setQwenFingerprint] = useState('')
 
-  useEffect(() => {
-    if (providerMode === 'qwen-chat') {
-      handleCheckQwenToken()
-      // Generate initial fingerprint for display
-      try {
-        const cookies = generateCookies() as any
-        setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
-      } catch {}
-    }
-  }, [providerMode])
-
-  const handleCheckQwenToken = async () => {
+  const handleCheckQwenToken = useCallback(async () => {
     setCheckingQwenToken(true)
     try {
       const activeToken = await getQwenToken()
@@ -83,20 +72,30 @@ export function SettingsForm({
     } finally {
       setCheckingQwenToken(false)
     }
-  }
+  }, [])
 
-  const handleUpdateQwenFingerprint = async () => {
+  const handleUpdateQwenFingerprint = useCallback(async () => {
     setUpdatingQwenFingerprint(true)
     try {
-      await updateQwenCookies()
-      const cookies = generateCookies() as any
+      const cookies = await updateQwenCookies()
       setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
     } catch (e) {
       console.error(e)
     } finally {
       setUpdatingQwenFingerprint(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (providerMode === 'qwen-chat') {
+      handleCheckQwenToken()
+      // Generate initial fingerprint for display
+      try {
+        const cookies = generateCookies()
+        setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
+      } catch {}
+    }
+  }, [providerMode, handleCheckQwenToken])
 
   const canSave = providerMode !== 'api'
     ? true
