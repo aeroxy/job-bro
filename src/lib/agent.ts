@@ -200,7 +200,7 @@ export async function runAgent(
       // No tool calls. If we expected a verdict, nudge and loop instead of
       // accepting plain-text content; the 10-iteration ceiling still bounds.
       if (hasVerdict) {
-        working.push({ role: 'assistant', content: response.content })
+        working.push({ role: 'assistant', content: response.content || ' ' })
         working.push({ role: 'user', content: `You must call the \`${verdictName}\` tool to submit your final answer. Do not write it as plain text.` })
         continue
       }
