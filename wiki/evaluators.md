@@ -241,7 +241,7 @@ The runner resolves an output strategy per evaluator via `resolveOutput()`:
 |---|---|---|
 | **Strict json_schema** | `structured_output === true` AND evaluator has no research tools | `response_format.json_schema` enforces shape server-side. No verdict tool, no parse/retry. |
 | **Verdict tool** (`provide_verdict`) | Otherwise (broad: any evaluator when structured_output off, or tool-using evaluators always) | The model calls `provide_verdict` with the verdict object as its arguments. The agent loop treats this as terminal. |
-| **Chrome backend** | `chrome-prompt` | No tools, no json_schema. Inline-prompt + parseJSON. |
+| **Chrome / Qwen backend** | `chrome-prompt` / `qwen-chat` | No tools, no json_schema. Inline-prompt + parseJSON. |
 
 The verdict tool is the fallback for evaluators that can't use strict json_schema — namely any evaluator when `structured_output` is off, and tool-using evaluators (risk, salary, growth, preference) even when `structured_output` is on (strict json_schema blocks `tool_calls`).
 
