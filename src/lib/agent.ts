@@ -176,6 +176,14 @@ export async function runAgent(
     if (hasVerdict && response.tool_calls?.length) {
       const verdictCall = response.tool_calls.find((c) => c.function.name === verdictToolName)
       if (verdictCall) {
+        // Filter tool_calls to only contain the verdictCall. Sibling research tool
+        // calls in the same response are never executed because the loop terminates immediately.
+        // Keeping them in history would trigger "unanswered tool call" errors from strict APIs.
+        working.push({
+          role: 'assistant',
+          content: response.content,
+          tool_calls: [verdictCall],
+        } as ChatMessage)
         return { content: verdictCall.function.arguments, messages: working }
       }
     }

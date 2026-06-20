@@ -124,7 +124,8 @@ export default defineBackground(() => {
           },
           condition: {
             urlFilter: 'https://chat.qwen.ai/api/*',
-            resourceTypes: [chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST]
+            resourceTypes: [chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST],
+            initiatorDomains: [chrome.runtime.id]
           }
         }
       ]

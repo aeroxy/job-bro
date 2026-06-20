@@ -65,7 +65,8 @@ User → LinkedIn Job Page
 
 The offscreen is the only place with access to `LanguageModel` (Gemini Nano) and the only place that parses HTML for tools. The service worker serializes everything through it:
 
-- **Tools** (`web_search`, `read_page`, `provide_verdict`): service worker fetches the URL with `AbortSignal.timeout(20s)`, then sends the raw HTML to offscreen with `PARSE_HTML`. Background's `onMessage` returns `false` for `PARSE_HTML` so the offscreen's `sendResponse` wins. The `provide_verdict` tool is terminal — when the model calls it, the agent loop ends and its arguments become the parsed evaluator output.
+- **URL-fetching Tools** (`web_search`, `read_page`): The service worker fetches the URL with `AbortSignal.timeout(20s)`, then sends the raw HTML to the offscreen document with `PARSE_HTML`. Background's `onMessage` returns `false` for `PARSE_HTML` so the offscreen's `sendResponse` (which uses DOMParser and Turndown) wins.
+- **Terminal Tool** (`provide_verdict`): This tool is fundamentally different as it is a terminal operation in the agent loop that ends the loop immediately. Its arguments become the parsed evaluator output. It does not involve fetching URLs or participating in the HTML parsing workflow.
 - **Chrome AI**: every call goes through a single FIFO `withChromeAiLock` inside the offscreen. Persistent chat sessions (one per `useChromeChatSession` instance) are stored in a `Map<sessionId, ChromeAiSession>` and addressed by id. The sidepanel/background hold only the id, not the object.
 
 ### AbortController Tracking
