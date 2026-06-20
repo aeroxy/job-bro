@@ -1,6 +1,7 @@
 import { jsonrepair } from 'jsonrepair'
 
 import { chatCompletionChrome } from './chrome-ai-client'
+import { sendQwenChat } from './qwen/qwen-service'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 import type { EvidenceItem } from '@/types/evaluation'
 import type { ChatCompletionWithToolsResult, ToolCall, ToolDefinition } from './tools/types'
@@ -108,6 +109,22 @@ export async function chatCompletion(
       json_mode: options?.json_mode,
       signal: options?.signal,
     })
+  }
+
+  if (config.backend === 'qwen-chat') {
+    // Offscreen document doesn't have access to chrome.cookies API.
+    // Detect Offscreen context and delegate to Background via message bridge.
+    if (typeof chrome !== 'undefined' && !chrome.cookies) {
+      const resp = await chrome.runtime.sendMessage({
+        type: 'QWEN_CHAT_REQUEST',
+        messages,
+      });
+      if (!resp?.ok) {
+        throw new Error(resp?.error || 'Failed to delegate Qwen Chat request to background.');
+      }
+      return resp.result;
+    }
+    return sendQwenChat(messages as any);
   }
 
   const queue = getQueue(config.base_url)
@@ -451,6 +468,14 @@ export async function chatCompletionWithTools(
   if (config.backend === 'chrome-prompt') {
     const content = await chatCompletionChrome(messages, {
       temperature: options.temperature ?? config.temperature,
+      signal: options.signal,
+    })
+    return { content }
+  }
+
+  if (config.backend === 'qwen-chat') {
+    const content = await chatCompletion(config, messages, {
+      temperature: options.temperature,
       signal: options.signal,
     })
     return { content }

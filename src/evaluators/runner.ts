@@ -122,7 +122,7 @@ function resolveOutput(
   spec: JsonSchemaSpec,
 ): ResolvedOutput {
   const researchTools = resolveTools(config, evaluator)
-  if (config.backend === 'chrome-prompt') return { tools: researchTools }
+  if (config.backend === 'chrome-prompt' || config.backend === 'qwen-chat') return { tools: researchTools }
   if (config.structured_output === true && researchTools.length === 0) {
     return { tools: researchTools, schema: spec }
   }
