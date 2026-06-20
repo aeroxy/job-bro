@@ -83,13 +83,15 @@ const LANGUAGE_PRESETS: Record<string, LanguagePreset> = {
 };
 
 function generateDeviceId(): string {
-    return Array.from({ length: 20 }, () =>
-        Math.floor(Math.random() * 16).toString(16)
-    ).join('');
+    const array = new Uint8Array(20);
+    crypto.getRandomValues(array);
+    return Array.from(array, (byte) => (byte & 15).toString(16)).join('');
 }
 
 function generateHash(): number {
-    return Math.floor(Math.random() * 4294967296);
+    const array = new Uint32Array(1);
+    crypto.getRandomValues(array);
+    return array[0];
 }
 
 function generateFingerprint(options: FingerprintOptions = {}): string {
