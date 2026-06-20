@@ -42,7 +42,7 @@ export async function runSalaryEvaluator(
   signal?: AbortSignal,
   jsonSchema?: JsonSchemaSpec,
   exec: ToolExecutor = executeTool,
-  verdictToolName?: string
+  verdictName?: string
 ): Promise<SalaryResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -76,7 +76,7 @@ export async function runSalaryEvaluator(
       signal,
       onToolCall,
       jsonSchema,
-      verdictToolName,
+      verdictName,
     }
   )
 }

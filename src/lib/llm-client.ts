@@ -111,9 +111,17 @@ export async function chatCompletion(
     })
   }
 
+  // Delegate to the Qwen agent backend. Qwen is NOT an LLM we call — it's
+  // a server-side agent with native web search, read-page, and thinking.
+  // We hand the whole research task off and get a finished answer back;
+  // the extension's own tools (`WEB_SEARCH_TOOL`, `READ_PAGE_TOOL`) are
+  // irrelevant here. `chatCompletion` / `chatCompletionWithTools` share
+  // this entry point for API symmetry, but the semantics differ: on the
+  // Qwen branch we're dispatching to an agent, not prompting a model.
+  //
+  // Offscreen documents don't have `chrome.cookies`, so detect that
+  // context and bridge the request to the background service worker.
   if (config.backend === 'qwen-chat') {
-    // Offscreen document doesn't have access to chrome.cookies API.
-    // Detect Offscreen context and delegate to Background via message bridge.
     if (typeof chrome !== 'undefined' && !chrome.cookies) {
       const resp = await chrome.runtime.sendMessage({
         type: 'QWEN_CHAT_REQUEST',

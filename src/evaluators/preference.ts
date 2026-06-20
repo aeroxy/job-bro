@@ -40,7 +40,7 @@ export async function runPreferenceEvaluator(
   signal?: AbortSignal,
   jsonSchema?: JsonSchemaSpec,
   exec: ToolExecutor = executeTool,
-  verdictToolName?: string
+  verdictName?: string
 ): Promise<PreferenceResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -69,7 +69,7 @@ export async function runPreferenceEvaluator(
       signal,
       onToolCall,
       jsonSchema,
-      verdictToolName,
+      verdictName,
     }
   )
 }

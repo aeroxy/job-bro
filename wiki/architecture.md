@@ -44,17 +44,24 @@ User → LinkedIn Job Page
          ▼ (returns ExtractedJob to sidepanel)
     Sidepanel → ANALYZE_JD → Background
      Background runs llm-handlers.runAnalysis (Promise.all)
-     5 evaluators → agent loop → tool calls / verdict tool / chat
+     5 evaluators → agent loop → tool calls / structured-output channel / chat
          │
          ├── backend === 'openai' ──────────────────────
          │     HTTP fetch → cloud LLM
          │     tool calls → service worker fetch
          │                  → PARSE_HTML → offscreen (DOMParser + Turndown)
          │
-         └── backend === 'chrome-prompt' ──────────────
-               chrome-ai-client → chrome.runtime.sendMessage → offscreen
-               offscreen FIFO queue → LanguageModel.create / .prompt (Gemini Nano)
-               Download progress broadcast → sidepanel
+         ├── backend === 'chrome-prompt' ──────────────
+         │     chrome-ai-client → chrome.runtime.sendMessage → offscreen
+         │     offscreen FIFO queue → LanguageModel.create / .prompt (Gemini Nano)
+         │     Download progress broadcast → sidepanel
+         │
+         └── backend === 'qwen-chat' ──────────────────
+               llm-client → QWEN_CHAT_REQUEST → background → sendQwenChat
+               fetch https://chat.qwen.ai/api/v2/chat/completions (credentials: include)
+               declarativeNetRequest rewrites Origin/Referer to chat.qwen.ai
+               Qwen is a delegated agent — does its own web search / read-page / thinking
+               server-side; the extension's own tools are not sent
          │
          ▼ (aggregator)
     AggregatedReport → saved to IndexedDB
@@ -110,6 +117,8 @@ All communication uses `chrome.runtime.sendMessage`. Message types are defined i
 | `CHROME_AI_SESSION_PROMPT` | any → offscreen | Session turn; returns `{ result: string }` |
 | `CHROME_AI_SESSION_DESTROY` | any → offscreen | Releases session; returns `{ result: null }` |
 | `CHROME_AI_DOWNLOAD_PROGRESS` | offscreen → all | `{ loaded: number }` — broadcast during model download |
+| `QWEN_CHAT_REQUEST` | offscreen → background | Delegate a chat completions call to the Qwen service (offscreen can't use `chrome.cookies` / `declarativeNetRequest`). Returns `{ ok, result }` or `{ ok: false, error }`. |
+| `QWEN_PING` | background → background | 10-second keep-alive fired by `sendQwenChatStream` to prevent the service worker from being terminated mid-stream. |
 
 ## Storage Layout
 
@@ -133,9 +142,10 @@ The content script (`content.ts`) is declared in `wxt.config.ts` to match `*://w
 
 | Backend | Runs In | Why |
 |---------|---------|-----|
-| External HTTP | Service worker | Fetch works reliably; no lifecycle issues |
+| External HTTP (Cloud) | Service worker | Fetch works reliably; no lifecycle issues |
 | Chrome AI | Offscreen document | `LanguageModel` API requires a window; service worker / workers don't have one |
 | HTML parsing (tools) | Offscreen document | `DOMParser` + Turndown need DOMParser API; service worker can't create one |
+| Qwen Chat | Service worker (bridged from offscreen) | Needs `chrome.cookies` to read/write `token` + `ssxmod_itna*` cookies, and `chrome.declarativeNetRequest` to rewrite Origin/Referer. Neither API is exposed to the offscreen document, so `llm-client.ts` detects the offscreen context and delegates via `QWEN_CHAT_REQUEST` to the background. |
 
 Chrome's built-in `LanguageModel` (Gemini Nano) requires a window context.
 The MV3 service worker does not expose this API. We host it (and the

@@ -19,7 +19,7 @@ import { runSalaryEvaluator, SALARY_JSON_SCHEMA } from './salary'
 import { runSummaryEvaluator, SUMMARY_JSON_SCHEMA } from './summary'
 import { aggregate, getScore, getVerdict } from './aggregator'
 import { jobToMarkdown } from '@/extractor/markdown'
-import { ALL_TOOLS, buildVerdictTool, VERDICT_TOOL_NAME } from '@/lib/tools/definitions'
+import { ALL_TOOLS, buildVerdictSchema, VERDICT_NAME } from '@/lib/tools/definitions'
 import { createCachedExecutor } from '@/lib/agent'
 import type { ToolCall, ToolDefinition } from '@/lib/tools/types'
 import type { JsonSchemaSpec } from '@/lib/llm-client'
@@ -98,22 +98,28 @@ function resolveTools(config: LLMConfig, evaluator: EvaluatorName): ToolDefiniti
 }
 
 // Resolved per-evaluator output strategy. Three paths, in priority order:
-//   1. Chrome backend       → research tools only (Chrome has no tool-calling
-//                             and ignores json_schema; inline-prompt path).
+//   1. Chrome / Qwen backend → research tools only (Chrome has no tool-calling
+//                              and ignores json_schema; Qwen is itself a
+//                              delegated agent with native server-side tools;
+//                              both use the inline-prompt path).
 //   2. Strict json_schema    → when structured_output is on AND the evaluator
-//                             has no research tools. Server enforces shape;
-//                             no verdict tool, no parse/retry.
-//   3. Verdict tool          → otherwise. The provide_verdict tool's parameters
-//                             ARE the evaluator's JSON schema; calling it ends
-//                             the agent loop with a JSON object of the right
-//                             shape. Replaces the inline-prompt + parseJSON +
-//                             retry-once path for every non-strict case.
-// `tools` always carries the research tools; the verdict tool is appended when
-// path 3 applies. `schema` is set only on path 2. `verdictToolName` only on 3.
+//                              has no research tools. Server enforces shape;
+//                              no structured-output channel, no parse/retry.
+//   3. In-house structured   → otherwise. `provide_verdict` is appended to
+//      output channel           the tools array as a fake tool declaration
+//                              whose `parameters` ARE the evaluator's JSON
+//                              schema. It has no handler and is never
+//                              executed — the agent loop intercepts the
+//                              tool_calls response and treats the call's
+//                              arguments as the final structured answer.
+//                              Replaces the inline-prompt + parseJSON +
+//                              retry-once path for every non-strict case.
+// `tools` always carries the research tools; the verdict channel is appended
+// when path 3 applies. `schema` is set only on path 2. `verdictName` only on 3.
 interface ResolvedOutput {
   tools: ToolDefinition[]
   schema?: JsonSchemaSpec
-  verdictToolName?: string
+  verdictName?: string
 }
 
 function resolveOutput(
@@ -127,8 +133,8 @@ function resolveOutput(
   if (config.structured_output === true && researchTools.length === 0) {
     return { tools: researchTools, schema: spec }
   }
-  const verdict = buildVerdictTool(spec)
-  return { tools: [...researchTools, verdict], verdictToolName: VERDICT_TOOL_NAME }
+  const verdict = buildVerdictSchema(spec)
+  return { tools: [...researchTools, verdict], verdictName: VERDICT_NAME }
 }
 
 export async function runAllEvaluators(
@@ -147,8 +153,9 @@ export async function runAllEvaluators(
 ): Promise<AggregatedReport> {
   const jobMarkdown = jobToMarkdown(job)
   // Per-evaluator output strategy (see resolveOutput): strict json_schema
-  // when possible, the provide_verdict tool otherwise. The verdict tool is
-  // appended to `tools` and `verdictToolName` is threaded to the agent loop.
+  // when possible, the provide_verdict structured-output channel otherwise.
+  // The channel is appended to `tools` and `verdictName` is threaded to the
+  // agent loop so it can intercept the call.
   const jobFitOut = resolveOutput(config, 'job_fit', JOB_FIT_JSON_SCHEMA)
   const salaryOut = resolveOutput(config, 'salary', SALARY_JSON_SCHEMA)
   const prefOut = resolveOutput(config, 'preference', PREFERENCE_JSON_SCHEMA)
@@ -197,14 +204,14 @@ export async function runAllEvaluators(
   // Stage 1 — preference goes first to warm the LLM's KV cache (its evidence
   // also seeds the downstream prior-research pool). No dependencies.
   await stageRun('preference', [], () =>
-    runPreferenceEvaluator(jobMarkdown, profile, config, customPrompt, prefOut.tools, forEvaluator('preference'), signal, prefOut.schema, exec, prefOut.verdictToolName))
+    runPreferenceEvaluator(jobMarkdown, profile, config, customPrompt, prefOut.tools, forEvaluator('preference'), signal, prefOut.schema, exec, prefOut.verdictName))
 
   // Stage 2 — independent researchers, concurrent.
   await Promise.all([
     stageRun('job_fit', [], () =>
-      runJobFitEvaluator(jobMarkdown, profile, config, customPrompt, jobFitOut.tools, forEvaluator('job_fit'), signal, jobFitOut.schema, exec, jobFitOut.verdictToolName)),
+      runJobFitEvaluator(jobMarkdown, profile, config, customPrompt, jobFitOut.tools, forEvaluator('job_fit'), signal, jobFitOut.schema, exec, jobFitOut.verdictName)),
     stageRun('salary', [], () =>
-      runSalaryEvaluator(jobMarkdown, profile, config, customPrompt, salaryOut.tools, forEvaluator('salary'), signal, salaryOut.schema, exec, salaryOut.verdictToolName)),
+      runSalaryEvaluator(jobMarkdown, profile, config, customPrompt, salaryOut.tools, forEvaluator('salary'), signal, salaryOut.schema, exec, salaryOut.verdictName)),
   ])
 
   // Conclusions piped into the downstream stage. Guaranteed defined when the
@@ -220,9 +227,9 @@ export async function runAllEvaluators(
   // Stage 3 — synthesizers. risk needs job_fit + salary; growth needs job_fit.
   await Promise.all([
     stageRun('risk', ['job_fit', 'salary'], () =>
-      runRiskEvaluator(jobMarkdown, profile, config, customPrompt, riskOut.tools, forEvaluator('risk'), signal, riskOut.schema, { jobFit: jobFitResult, salary: salaryResult }, priorResearch, exec, riskOut.verdictToolName)),
+      runRiskEvaluator(jobMarkdown, profile, config, customPrompt, riskOut.tools, forEvaluator('risk'), signal, riskOut.schema, { jobFit: jobFitResult, salary: salaryResult }, priorResearch, exec, riskOut.verdictName)),
     stageRun('growth', ['job_fit'], () =>
-      runGrowthEvaluator(jobMarkdown, profile, config, customPrompt, growthOut.tools, forEvaluator('growth'), signal, growthOut.schema, jobFitResult, priorResearch, exec, growthOut.verdictToolName)),
+      runGrowthEvaluator(jobMarkdown, profile, config, customPrompt, growthOut.tools, forEvaluator('growth'), signal, growthOut.schema, jobFitResult, priorResearch, exec, growthOut.verdictName)),
   ])
 
   const evaluators = {
@@ -249,7 +256,7 @@ export async function runAllEvaluators(
   // other failure is surfaced (fail-fast) so the UI can offer a Continue.
   onProgress?.('summary', 'running')
   try {
-    const summaryResult = await runSummaryEvaluator(jobMarkdown, evaluators, score, verdict, config, customPrompt, summaryOut.tools, forEvaluator('summary'), signal, summaryOut.schema, exec, summaryOut.verdictToolName)
+    const summaryResult = await runSummaryEvaluator(jobMarkdown, evaluators, score, verdict, config, customPrompt, summaryOut.tools, forEvaluator('summary'), signal, summaryOut.schema, exec, summaryOut.verdictName)
     onProgress?.('summary', 'completed')
     onEvaluatorResult?.('summary', summaryResult)
     return aggregate(job, evaluators, summaryResult.reasoning, summaryResult.job_summary)

@@ -46,7 +46,7 @@ export async function runSummaryEvaluator(
   signal?: AbortSignal,
   jsonSchema?: JsonSchemaSpec,
   exec: ToolExecutor = executeTool,
-  verdictToolName?: string
+  verdictName?: string
 ): Promise<SummaryResult> {
   const userContent = `Score: ${score}/100 | Verdict: ${verdict}
 
@@ -73,6 +73,6 @@ ${toonEncode(evaluatorResults)}
     signal,
     onToolCall,
     jsonSchema,
-    verdictToolName,
+    verdictName,
   })
 }
