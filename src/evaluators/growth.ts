@@ -69,7 +69,7 @@ export async function runGrowthEvaluator(
   jobFit?: JobFitResult,
   priorResearch?: EvidenceItem[],
   exec: ToolExecutor = executeTool,
-  verdictToolName?: string
+  verdictName?: string
 ): Promise<GrowthResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -112,7 +112,7 @@ export async function runGrowthEvaluator(
       signal,
       onToolCall,
       jsonSchema,
-      verdictToolName,
+      verdictName,
     }
   )
 }

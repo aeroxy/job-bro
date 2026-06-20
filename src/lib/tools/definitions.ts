@@ -42,28 +42,47 @@ export const READ_PAGE_TOOL: ToolDefinition = {
   },
 }
 
+// Real research tools — the only definitions that have handlers in `handlers.ts`
+// and produce tool results the model reads. `provide_verdict` (below) is NOT in
+// this list: it's a structured-output channel, not a research tool.
 export const ALL_TOOLS: ToolDefinition[] = [WEB_SEARCH_TOOL, READ_PAGE_TOOL]
 
-// The verdict tool is the structured-output mechanism for evaluators that
-// can't use strict `response_format.json_schema` — i.e. any evaluator when
-// structured_output is off, and tool-using evaluators always (strict
-// json_schema blocks tool_calls). Its `parameters` ARE the evaluator's JSON
-// schema, so calling the tool yields a JSON object of exactly the right
-// shape. The agent loop treats this tool as terminal: when the model calls
-// it, the loop ends and the call's arguments become the parsed result.
+// ============================================================================
+// `provide_verdict` — in-house structured-output channel
+// ============================================================================
 //
-// This tool survives past MAX_TOOL_ROUNDS (research tools are stripped after
-// 5 rounds, but provide_verdict remains, with the nudge loop forcing the call
-// while keeping tool_choice set to 'auto'). The MAX_AGENT_ITERATIONS (10) ceiling still bounds the loop.
-export const VERDICT_TOOL_NAME = 'provide_verdict'
+// NOT a tool in the sense of `web_search` / `read_page`:
+//   * it has no handler in `handlers.ts` and is never executed;
+//   * no tool result is ever returned for the model to read;
+//   * the agent loop intercepts the call and treats its arguments as the
+//     final structured answer.
+//
+// It shares the *wire format* with tools (a function declaration under
+// `body.tools`) because it's the only mechanism left when strict
+// `response_format.json_schema` can't be used:
+//   - strict json_schema is mutually exclusive with `tool_calls` on most
+//     providers, so any evaluator that genuinely needs research tools can't
+//     also use it;
+//   - when `structured_output` is off, no schema enforcement exists at all.
+//
+// `buildVerdictSchema` wraps the evaluator's JSON schema as a fake tool
+// declaration: the schema's `properties` become the tool's `parameters`, so
+// "calling the tool" yields a JSON object of exactly the right shape. The
+// agent loop terminates on this call — its `arguments` string becomes the
+// returned content.
+//
+// Survives past `MAX_TOOL_ROUNDS` (research tools are stripped after 5
+// rounds; this remains), with the nudge loop forcing the call while
+// `tool_choice` stays `'auto'`. `MAX_AGENT_ITERATIONS` (10) bounds the loop.
+export const VERDICT_NAME = 'provide_verdict'
 
-export function buildVerdictTool(schema: JsonSchemaSpec): ToolDefinition {
+export function buildVerdictSchema(schema: JsonSchemaSpec): ToolDefinition {
   return {
     type: 'function',
     function: {
-      name: VERDICT_TOOL_NAME,
+      name: VERDICT_NAME,
       description:
-        'Submit your final structured verdict. You MUST call this tool to end your turn — the parameters ARE the verdict object. Do not write the answer as plain text.',
+        'Submit your final structured verdict. You MUST call this to end your turn — the parameters ARE the verdict object. Do not write the answer as plain text.',
       parameters: schema.schema as unknown as ToolParameterSchema,
     },
   }

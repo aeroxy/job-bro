@@ -20,18 +20,18 @@
 | Styling | Tailwind CSS 4 |
 | Icons | Lucide React |
 | Storage | `chrome.storage.local` + IndexedDB (idb) |
-| LLM Integration | OpenAI-compatible API (fetch-based) |
+| LLM Integration | OpenAI-compatible HTTP · Chrome built-in AI (Gemini Nano) · Qwen Chat (delegated agent via user's `chat.qwen.ai` session) |
 | Markdown | `marked` |
 | Build | Vite (via WXT) |
 | Package Manager | Bun |
 
 ## Extension Metadata
 
-- **Version:** 0.1.9
 - **Manifest:** V3
-- **Permissions:** `sidePanel`, `storage`, `activeTab`, `tabs`, `scripting`
-- **Host Permissions:** `*://www.linkedin.com/*`
+- **Permissions:** `sidePanel`, `storage`, `activeTab`, `tabs`, `scripting`, `offscreen`, `cookies`, `declarativeNetRequest`
+- **Host Permissions:** `*://*/*` (Cloud LLM endpoint + `chat.qwen.ai` API)
 - **UI Entry:** Side panel (`sidepanel/index.html`)
+- **Version:** see `package.json` (source of truth — do not mirror here)
 
 ## Core Constraints
 

@@ -2,15 +2,19 @@
 
 ## `llm-client.ts`
 
-LLM dispatcher. Routes to one of two backends based on `LLMConfig.backend`:
-- `'openai'` (default) — OpenAI-compatible HTTP fetch.
+LLM dispatcher. Routes to one of three backends based on `LLMConfig.backend`:
+- `'openai'` (default) — OpenAI-compatible HTTP fetch to a cloud model.
 - `'chrome-prompt'` — Chrome's built-in `LanguageModel` API (Gemini Nano), via [`chrome-ai-client.ts`](#chrome-ai-clientts).
+- `'qwen-chat'` — **Delegated agent**, not a model. Calls into [`qwen/qwen-service.ts`](#qwenqwen-servicets), which drives the user's live `chat.qwen.ai` session. Qwen runs its own native web search, read-page, and thinking on the server side — the extension's `WEB_SEARCH_TOOL` / `READ_PAGE_TOOL` are not sent. `chatCompletion` is reused as the dispatch entry point for API symmetry, but on this branch the semantics are "delegate task to agent", not "prompt a model".
 
-The dispatcher is pure TS and runs in the service worker. Both backends are addressed via the same `chatCompletion` / `chatCompletionWithTools` surface; Chrome's window-only `LanguageModel` lives in the offscreen and is reached through `chrome-ai-client`.
+The dispatcher is pure TS and runs in the service worker. Cloud and Chrome are addressed via the same `chatCompletion` / `chatCompletionWithTools` surface; Chrome's window-only `LanguageModel` lives in the offscreen and is reached through `chrome-ai-client`. The Qwen branch is reached from the offscreen via a `QWEN_CHAT_REQUEST` message bridge to the background (the offscreen has no `chrome.cookies`).
 
 ### `chatCompletion(config, messages, options)`
 
-If `config.backend === 'chrome-prompt'`, delegates to `chatCompletionChrome`. Otherwise makes a POST to `config.base_url + /chat/completions`.
+Dispatch priority order:
+1.  `chrome-prompt` → `chatCompletionChrome`.
+2.  `qwen-chat` → `sendQwenChat` via the Qwen agent service (bridged through the background when called from the offscreen).
+3.  Otherwise → POST to `config.base_url + /chat/completions`.
 
 Options:
 - `json_mode: boolean` — sets `response_format: { type: "json_object" }`
@@ -28,7 +32,14 @@ Options:
 
 ### `chatCompletionWithTools(config, messages, tools, options)`
 
-Non-streaming tool-call variant. Same HTTP plumbing, but `tools` is forwarded as `body.tools` and the response may include `tool_calls`. Returns a `ChatCompletionWithToolsResult` (`{ content, tool_calls, raw }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` and `name` for tool results). Chrome backend passes through with no `tools` (Gemini Nano has no native tool API) and returns the same shape with `tool_calls: []`, so the agent loop terminates after one iteration.
+Non-streaming tool-call variant for the **Cloud** backend. Same HTTP plumbing, but `tools` is forwarded as `body.tools` and the response may include `tool_calls`. Returns a `ChatCompletionWithToolsResult` (`{ content, tool_calls, raw }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` and `name` for tool results).
+
+Two backends short-circuit here:
+
+- **Chrome** — `resolveOutput` routes it to the inline-prompt path (Gemini Nano has no native tool API and ignores `response_format.json_schema`), so Chrome arrives with `tools = []`. Returns `{ content }` from a single `chatCompletion` call — the agent loop terminates after one iteration.
+- **Qwen** — Qwen is an *agent* with server-side tools, not a model that calls ours. Forwarding our `WEB_SEARCH_TOOL` / `READ_PAGE_TOOL` schemas would be meaningless and confuse its prompt, so this function short-circuits to `chatCompletion` and returns `{ content }`. Research is done server-side by Qwen itself.
+
+Cloud is the only path that genuinely participates in the OpenAI tool-calling protocol.
 
 ---
 
@@ -65,14 +76,39 @@ Thin messaging client for the Chrome AI work that lives in the offscreen documen
 
 ---
 
+## `qwen/qwen-service.ts`
+
+**Delegated agent** backend, not a model. When `config.backend === 'qwen-chat'`, the extension hands the whole research task off to the user's live `chat.qwen.ai` session and receives a finished answer back. Qwen runs its own native **web search**, **read-page**, and **thinking** on the server side — so the extension's `WEB_SEARCH_TOOL` / `READ_PAGE_TOOL` research tools and the `provide_verdict` structured-output channel are irrelevant on this path. `resolveOutput` in `evaluators/runner.ts` routes Qwen to the inline-prompt strategy (no schema, no verdict channel), and `chatCompletionWithTools` short-circuits to `chatCompletion`.
+
+Why it exists: lets users run evaluations without an API key or a self-hosted proxy, using only their authenticated Qwen browser session.
+
+| Export | Purpose |
+|---|---|
+| `getQwenToken()` | Retrieves the active JWT — first from the `token` cookie on `chat.qwen.ai`, falling back to `chrome.scripting.executeScript` against an open `chat.qwen.ai` tab to pull it from localStorage. |
+| `updateQwenCookies()` | Generates fresh `ssxmod_itna` / `ssxmod_itna2` security cookies via [`cookie-generator.ts`](#qwencookie-generatorts) and writes them to the cookie jar. Called before every completions request. |
+| `createQwenSession(token)` | `POST /api/v2/chats/new` — opens a new chat on the user's account and returns the `chat_id`. |
+| `sendQwenChat(messages, signal?)` | Non-streaming wrapper around `sendQwenChatStream` that accumulates chunks and resolves to the final string. |
+| `sendQwenChatStream(messages, onChunk, onDone, onError, signal?)` | Streams SSE from `POST /api/v2/chat/completions`. Refreshes security cookies, retrieves the token, opens a session, then decodes deltas in real time. A 10-second keep-alive ping (`QWEN_PING` to background) keeps the service worker alive during long responses. |
+
+Supporting modules:
+
+- `qwen/cookie-generator.ts` — LZW-compresses and custom-base64-encodes a 37-field fingerprint into the `ssxmod_itna` / `ssxmod_itna2` cookies Qwen's anti-bot checks require. Hash fields are re-randomized on every call; the timestamp field is refreshed to `Date.now()`.
+- `qwen/fingerprint.ts` — Generates the default 37-field template (device id, SDK version, platform, screen info, WebGL renderer, etc.) with presets for `macIntel` / `macM1` / `win64` / `linux` and common screen sizes.
+
+Execution context: the service uses `chrome.cookies` and `chrome.declarativeNetRequest`, which the offscreen document can't reach. `chatCompletion` in `llm-client.ts` detects the offscreen context (`!chrome.cookies`) and bridges the call to the background via `QWEN_CHAT_REQUEST`; the background handler forwards to `sendQwenChat`.
+
+---
+
 ## `agent.ts`
 
 Agent loop driver. Replaces the old `runWithValidation` for evaluator output. Lives in the service worker (or any extension page — it's pure TS).
 
+**Only the Cloud backend genuinely participates in the tool-calling loop.** Chrome short-circuits here because `resolveOutput` routes it to the inline-prompt path (Gemini Nano has no native tool API). Qwen short-circuits because it is itself an agent — forwarding our tool schemas would be meaningless.
+
 | Export | Purpose |
 |---|---|
-| `runAgent(config, messages, tools, handlers, options)` | Drives an OpenAI-style tool-calling loop: model → tool calls → append results → loop. Caps at `MAX_AGENT_ITERATIONS = 8`. Returns the final `ChatCompletionWithToolsResult`. |
-| `runAgentWithValidation<T>(config, messages, tools, handlers, validate, options)` | Wraps `runAgent` with a JSON-extract + Zod-style validate step. On validation failure, appends the errors as a user message and continues the loop (or retries once before throwing). |
+| `runAgent(config, messages, tools, handlers, options)` | Drives an OpenAI-style tool-calling loop: model → tool calls → append results → loop. Caps at `MAX_AGENT_ITERATIONS = 10`; research tools are stripped after `MAX_TOOL_ROUNDS = 5`. When `options.verdictName` is set, the matching `provide_verdict` call is intercepted as the in-house structured-output channel: its arguments become the returned JSON content, siblings are dropped from history, and the loop ends. If the model emits plain text instead of calling it, a nudge message is appended and the loop continues. |
+| `runAgentWithValidation<T>(config, messages, tools, handlers, validate, options)` | Wraps `runAgent` with a JSON-extract + validate step. On validation failure, appends the errors as a `role: 'tool'` message (referencing the `provide_verdict` call's `tool_call_id` when the structured-output channel is in play, otherwise a plain-text user turn) and re-runs the agent so the correction flows through the same channel. |
 | `executeTool(call, handlers, context)` | Generic dispatcher: looks up the tool by name in `handlers`, calls it with parsed args, returns the result. |
 | `ToolHandlerContext` | `{ signal: AbortSignal }` passed to handlers so they can compose with the caller's timeout. |
 
@@ -88,10 +124,14 @@ Tool definitions + handlers, shared across evaluators.
 `ToolDefinition` (function-calling schema), `ToolCall`, `ToolHandler`, `ToolHandlerContext`, `ChatCompletionWithToolsResult`.
 
 ### `definitions.ts`
-Two tools, both OpenAI-compatible function-calling schemas:
+Two research tools (the only definitions that have handlers in `handlers.ts` and produce tool results the model reads):
 - `WEB_SEARCH_TOOL` — `{ query: string }`. Run by the service worker: fetch `https://html.duckduckgo.com/html?q=...`, then `PARSE_HTML` to offscreen.
 - `READ_PAGE_TOOL` — `{ url: string }`. Fetch (with `AbortSignal.timeout(20s)`), then `PARSE_HTML`.
-- `ALL_TOOLS` — the array passed to every evaluator's `chatCompletionWithTools` call.
+- `ALL_TOOLS` — array of the two research tools above. Passed to every evaluator's `chatCompletionWithTools` call.
+
+**In-house structured-output channel** (NOT a tool — no handler, no execution, no result the model reads):
+- `VERDICT_NAME = 'provide_verdict'` — the wire-format name the agent loop watches for.
+- `buildVerdictSchema(evaluatorSchema)` → a fake tool declaration whose `parameters` ARE the evaluator's JSON schema. Used by `resolveOutput` in `evaluators/runner.ts` on the non-strict path (path 3). The model "calls" it, and the agent loop intercepts the call's `arguments` string as the final structured answer. Exists because strict `response_format.json_schema` is mutually exclusive with `tool_calls` on most providers, so tool-using evaluators can't also use it. Survives `MAX_TOOL_ROUNDS` (research tools are stripped; this remains), with the nudge loop forcing the call while `tool_choice` stays `'auto'`.
 
 ### `handlers.ts`
 `webSearch` and `readPage` — fetch in the service worker, send HTML to offscreen for the Turndown conversion, return the resulting markdown. Both honor `context.signal` for caller aborts.
