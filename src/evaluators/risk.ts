@@ -83,7 +83,8 @@ export async function runRiskEvaluator(
   jsonSchema?: JsonSchemaSpec,
   upstream?: RiskUpstream,
   priorResearch?: EvidenceItem[],
-  exec: ToolExecutor = executeTool
+  exec: ToolExecutor = executeTool,
+  verdictToolName?: string
 ): Promise<RiskResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -127,6 +128,7 @@ export async function runRiskEvaluator(
       signal,
       onToolCall,
       jsonSchema,
+      verdictToolName,
     }
   )
 }

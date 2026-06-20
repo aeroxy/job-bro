@@ -1,10 +1,13 @@
 // Agent loop: drives the LLM through tool use until it produces a final
-// content message (no tool_calls). Each iteration:
+// answer. Each iteration:
 //   1. Send messages → chatCompletionWithTools
-//   2. If response has tool_calls:
+//   2. If response calls the verdict tool (terminal): return its args.
+//   3. Else if response has tool_calls:
 //        append assistant message
 //        for each call: append tool result via executeTool()
-//   3. Else: return content
+//   4. Else (no tool_calls):
+//        if a verdict tool is expected, nudge and loop;
+//        otherwise return content.
 // Caps iterations to prevent runaway.
 
 import { chatCompletionWithTools, parseJSON } from './llm-client'
@@ -32,8 +35,16 @@ export interface AgentOptions {
   // in the agent loop passes response_format.json_schema so the model can't
   // drift shape — eliminates the parseJSON/validate retry path for providers
   // that support it (OpenAI, Groq, Together, vLLM, etc.). Ignored by Chrome
-  // backend. Evaluators thread this from config.structured_output.
+  // backend. Evaluators thread this from config.structured_output. Mutually
+  // exclusive with verdictToolName (the verdict tool replaces strict
+  // json_schema whenever tools are present or structured_output is off).
   jsonSchema?: JsonSchemaSpec
+  // When set, a tool with this name is treated as terminal: calling it ends
+  // the loop and its arguments (a JSON string) become the returned content.
+  // Survives MAX_TOOL_ROUNDS — after research tools are stripped, this tool
+  // remains and tool_choice:'required' forces the model to call it. Used by
+  // evaluators via the provide_verdict tool (see lib/tools/definitions.ts).
+  verdictToolName?: string
 }
 
 // Generic tool executor — works in any extension page (service worker,
@@ -134,20 +145,49 @@ export async function runAgent(
   messages: ChatMessage[],
   options: AgentOptions
 ): Promise<{ content: string; messages: ChatMessage[] }> {
-  const { tools, executeTool, signal, onToolCall, maxIterations = MAX_AGENT_ITERATIONS, jsonSchema } = options
+  const { tools, executeTool, signal, onToolCall, maxIterations = MAX_AGENT_ITERATIONS, jsonSchema, verdictToolName } = options
   const working: ChatMessage[] = [...messages]
+
+  // Split out the verdict tool (terminal) from research tools. The verdict
+  // tool survives past MAX_TOOL_ROUNDS; research tools do not.
+  const hasVerdict = !!verdictToolName && tools.some((t) => t.function.name === verdictToolName)
+  const researchToolCount = hasVerdict
+    ? tools.filter((t) => t.function.name !== verdictToolName).length
+    : tools.length
+  const verdictOnlyTools = hasVerdict ? tools.filter((t) => t.function.name === verdictToolName) : []
 
   for (let i = 0; i < maxIterations; i++) {
     if (signal?.aborted) {
       throw new DOMException('Agent aborted', 'AbortError')
     }
-    // After MAX_TOOL_ROUNDS, strip tools so the model is forced to produce
-    // a final content message instead of continuing to call tools. Still up
-    // to MAX_AGENT_ITERATIONS total iterations are available for retries.
-    const activeTools = i < MAX_TOOL_ROUNDS ? tools : []
+    // After MAX_TOOL_ROUNDS, strip research tools but KEEP the verdict tool
+    // (if any) so the model can still submit its answer. When there are no
+    // research tools at all, only the verdict tool is shown from the start.
+    // tool_choice stays 'auto' throughout — some providers (e.g. Anthropic
+    // in thinking mode) reject 'required'. The nudge loop handles the case
+    // where the model emits plain text instead of calling the verdict tool.
+    const verdictOnly = hasVerdict && (researchToolCount === 0 || i >= MAX_TOOL_ROUNDS)
+    const activeTools = verdictOnly ? verdictOnlyTools : tools
     const response = await chatCompletionWithTools(config, working, { tools: activeTools, signal, jsonSchema })
 
+    // The verdict tool is terminal: extract its arguments as the final
+    // content (a JSON string) and end the loop. Sibling tool calls in the
+    // same response are dropped — the model has declared it is done.
+    if (hasVerdict && response.tool_calls?.length) {
+      const verdictCall = response.tool_calls.find((c) => c.function.name === verdictToolName)
+      if (verdictCall) {
+        return { content: verdictCall.function.arguments, messages: working }
+      }
+    }
+
     if (!response.tool_calls?.length) {
+      // No tool calls. If we expected a verdict, nudge and loop instead of
+      // accepting plain-text content; the 10-iteration ceiling still bounds.
+      if (hasVerdict) {
+        working.push({ role: 'assistant', content: response.content })
+        working.push({ role: 'user', content: `You must call the \`${verdictToolName}\` tool to submit your final answer. Do not write it as plain text.` })
+        continue
+      }
       return { content: response.content, messages: working }
     }
 
@@ -191,18 +231,24 @@ export async function runAgentWithValidation<T extends object>(
   messages: ChatMessage[],
   options: AgentOptions & { validate: (result: T) => string | null }
 ): Promise<T> {
-  const { validate, ...agentOpts } = options
+  const { validate, verdictToolName, ...agentOpts } = options
+
+  // Inject the verdict instruction once. The history returned by runAgent
+  // carries it, so the retry path (which reuses history) doesn't re-inject.
+  const initial: ChatMessage[] = verdictToolName
+    ? [...messages, { role: 'system', content: `To submit your final answer, call the \`${verdictToolName}\` tool with the verdict object as its arguments. The turn only ends when you call it — do not write the answer as plain text.` }]
+    : messages
 
   // Reuse the agent's accumulated transcript (tool calls + results) on retry so
   // the correction step keeps the gathered context instead of re-researching.
-  const { content: raw, messages: history } = await runAgent(config, messages, agentOpts)
+  const { content: raw, messages: history } = await runAgent(config, initial, { ...agentOpts, verdictToolName })
   try {
     const parsed = parseJSON<T>(raw)
     const error = validate(parsed)
     if (!error) return parsed
-    return await retry<T>(config, history, agentOpts, raw, error, validate)
+    return await retry<T>(config, history, agentOpts, raw, error, validate, verdictToolName)
   } catch (parseError) {
-    return await retry<T>(config, history, agentOpts, raw, `Could not parse JSON: ${(parseError as Error).message}`, validate)
+    return await retry<T>(config, history, agentOpts, raw, `Could not parse JSON: ${(parseError as Error).message}`, validate, verdictToolName)
   }
 }
 
@@ -212,14 +258,21 @@ async function retry<T extends object>(
   agentOpts: AgentOptions,
   badResponse: string,
   errorMessage: string,
-  validate: (result: T) => string | null
+  validate: (result: T) => string | null,
+  verdictToolName?: string
 ): Promise<T> {
+  // When the verdict tool is in play, the correction must go back through it
+  // (the loop only accepts a tool call as a final answer). Otherwise fall
+  // back to the plain-text "compact JSON" nudge.
+  const fixInstruction = verdictToolName
+    ? `${errorMessage}. Call \`${verdictToolName}\` with the corrected JSON.`
+    : `${errorMessage}. Fix it and output compact JSON only.`
   const retryMessages: ChatMessage[] = [
     ...history,
     { role: 'assistant', content: badResponse },
-    { role: 'user', content: `${errorMessage}. Fix it and output compact JSON only.` },
+    { role: 'user', content: fixInstruction },
   ]
-  const { content: retryRaw } = await runAgent(config, retryMessages, agentOpts)
+  const { content: retryRaw } = await runAgent(config, retryMessages, { ...agentOpts, verdictToolName })
   // Re-validate the retry too — otherwise invalid-but-parseable JSON would slip
   // through and callers' Promise<T> contract (and downstream scoring) breaks.
   const parsed = parseJSON<T>(retryRaw)

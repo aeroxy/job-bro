@@ -41,7 +41,8 @@ export async function runJobFitEvaluator(
   onToolCall?: (call: ToolCall) => void,
   signal?: AbortSignal,
   jsonSchema?: JsonSchemaSpec,
-  exec: ToolExecutor = executeTool
+  exec: ToolExecutor = executeTool,
+  verdictToolName?: string
 ): Promise<JobFitResult> {
   const messages: ChatMessage[] = []
   if (customPrompt) messages.push({ role: 'system', content: customPrompt })
@@ -70,6 +71,7 @@ export async function runJobFitEvaluator(
       signal,
       onToolCall,
       jsonSchema,
+      verdictToolName,
     }
   )
 }

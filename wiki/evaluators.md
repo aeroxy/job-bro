@@ -231,16 +231,38 @@ Supports iterative refinement: each regeneration receives the previous version a
 
 ## Agent Loop & Tools
 
-Every evaluator runs through the **agent loop** in `src/lib/agent.ts`. The loop drives the LLM with tool-calling until it produces a final content message (no `tool_calls`); that final content is parsed as JSON like any other evaluator output.
+Every evaluator runs through the **agent loop** in `src/lib/agent.ts`. The loop drives the LLM with tool-calling until it produces a final answer; that answer is parsed as JSON like any other evaluator output.
+
+### Output strategy (3 paths)
+
+The runner resolves an output strategy per evaluator via `resolveOutput()`:
+
+| Path | When | How |
+|---|---|---|
+| **Strict json_schema** | `structured_output === true` AND evaluator has no research tools | `response_format.json_schema` enforces shape server-side. No verdict tool, no parse/retry. |
+| **Verdict tool** (`provide_verdict`) | Otherwise (broad: any evaluator when structured_output off, or tool-using evaluators always) | The model calls `provide_verdict` with the verdict object as its arguments. The agent loop treats this as terminal. |
+| **Chrome backend** | `chrome-prompt` | No tools, no json_schema. Inline-prompt + parseJSON. |
+
+The verdict tool is the fallback for evaluators that can't use strict json_schema — namely any evaluator when `structured_output` is off, and tool-using evaluators (risk, salary, growth, preference) even when `structured_output` is on (strict json_schema blocks `tool_calls`).
 
 ### How the agent loop works
 
 1. Send messages → `chatCompletionWithTools` (adds `tools` to the request body)
-2. If the response has `tool_calls`:
+2. If the response calls the **verdict tool** (terminal): return its args as the final content.
+3. Else if the response has `tool_calls`:
    - Append the assistant message
    - For each call: invoke `executeTool(call, signal)`, append a `tool` role message with the result
-3. Else: return the content
-4. Cap at MAX_AGENT_ITERATIONS = 3 iterations
+4. Else (no tool_calls):
+   - If a verdict tool is expected: nudge ("call `provide_verdict`") and loop
+   - Otherwise: return the content
+5. Cap at MAX_AGENT_ITERATIONS = 10
+
+### Turn limits
+
+- **MAX_TOOL_ROUNDS = 5**: after 5 rounds, research tools (`web_search`, `read_page`) are stripped. The verdict tool **survives** past this limit. When only the verdict tool remains, the nudge loop ("call `provide_verdict`") guides the model to submit its answer.
+- **MAX_AGENT_ITERATIONS = 10**: hard ceiling on the entire loop. Bounded even with the verdict-nudge retry path.
+
+For evaluators with no research tools (job_fit, summary when structured_output is off), only the verdict tool is shown from iteration 0.
 
 For the Chrome AI backend (Gemini Nano), tools aren't supported natively — the request goes through without `tools`, the response has no `tool_calls`, and the loop terminates after one iteration. Behavior matches the pre-agent path.
 
@@ -258,6 +280,7 @@ Defined in `src/lib/tools/definitions.ts`:
 |---|---|---|
 | `web_search` | `query: string` | `fetch` DuckDuckGo HTML endpoint, strip `<script>`/`<style>`, convert to markdown |
 | `read_page` | `url: string` | `fetch` any HTTP(S) URL, strip `<script>`/`<style>`, convert to markdown |
+| `provide_verdict` | `<evaluator schema>` | **Terminal.** Submit the final structured verdict. The parameters ARE the evaluator's JSON schema — calling it yields a JSON object of exactly the right shape. Survives past MAX_TOOL_ROUNDS; the agent loop ends when this tool is called. |
 
 ### Tool execution pipeline
 
@@ -280,6 +303,8 @@ The service worker's `onMessage` listener returns `false` for `PARSE_HTML` messa
 ### `runAgentWithValidation`
 
 `runAgentWithValidation<T>()` (`src/lib/agent.ts`) is the agent-aware replacement for `runWithValidation`. It runs the agent loop, parses the final content as JSON, validates, and retries once on parse/validation failure — same semantics as `runWithValidation`, but tools are available.
+
+When a `verdictToolName` is provided, a system instruction is injected ("call `provide_verdict` to end your turn") and the retry message directs the model back through the verdict tool instead of asking for plain JSON.
 
 All 5 evaluators + the summary evaluator use it. The Risk evaluator's prompt explicitly mentions the available tools, since looking up unknown companies is its primary use case. Other evaluators can opt in by adding a similar note.
 
