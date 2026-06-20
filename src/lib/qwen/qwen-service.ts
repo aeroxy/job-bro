@@ -116,7 +116,12 @@ export async function createQwenSession(token: string): Promise<string | null> {
         'content-type': 'application/json',
         'source': 'web',
         'version': '0.2.63',
-        'timezone': new Date().toString().replace(/GMT\+0800/, 'GMT+0800'),
+        'timezone': (() => {
+          const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'longOffset' })
+            .formatToParts(new Date());
+          const tz = parts.find(p => p.type === 'timeZoneName')?.value ?? 'GMT+0000';
+          return tz.replace(/^GMT([+-])(\d{2}):(\d{2})$/, 'GMT$1$2$3');
+        })(),
         'x-request-id': crypto.randomUUID(),
       },
       body: JSON.stringify({
@@ -308,7 +313,12 @@ export async function sendQwenChatStream(
         'token': token,
         'bx-v': '2.5.36',
         'version': '0.2.63',
-        'timezone': new Date().toString().replace(/GMT\+0800/, 'GMT+0800'),
+        'timezone': (() => {
+          const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'longOffset' })
+            .formatToParts(new Date());
+          const tz = parts.find(p => p.type === 'timeZoneName')?.value ?? 'GMT+0000';
+          return tz.replace(/^GMT([+-])(\d{2}):(\d{2})$/, 'GMT$1$2$3');
+        })(),
         'x-request-id': crypto.randomUUID(),
         'x-accel-buffering': 'no',
       },
