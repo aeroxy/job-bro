@@ -2,48 +2,66 @@ import { generateCookies, type CookieResult } from './cookie-generator';
 
 const QWEN_ORIGIN = 'https://chat.qwen.ai';
 
-/**
- * Gets a specific cookie value for chat.qwen.ai
- */
-async function getCookie(name: string): Promise<string | null> {
-  try {
-    const cookie = await chrome.cookies.get({
-      url: QWEN_ORIGIN,
-      name: name,
-    });
-    return cookie ? cookie.value : null;
-  } catch (e) {
-    console.error(`[Qwen Service] Failed to get cookie ${name}:`, e);
-    return null;
-  }
+// Format the local timezone offset as `GMT±HHMM` — the exact shape Qwen's
+// `timezone` header expects. `getTimezoneOffset()` returns minutes *behind*
+// UTC (positive west), so negate to get the conventional east-positive sign.
+function formatTimezone(): string {
+  const offset = -new Date().getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const abs = Math.abs(offset);
+  const hours = String(Math.floor(abs / 60)).padStart(2, '0');
+  const mins = String(abs % 60).padStart(2, '0');
+  return `GMT${sign}${hours}${mins}`;
 }
 
 /**
- * Sets a specific cookie for chat.qwen.ai
+ * Gets a specific cookie value for chat.qwen.ai.
+ * Throws if the cookies API is unavailable — callers discriminate between
+ * "no such cookie" (null) and "API is broken" (throw) to decide whether to
+ * fall back to localStorage extraction.
+ */
+async function getCookie(name: string): Promise<string | null> {
+  if (typeof chrome === 'undefined' || !chrome.cookies) {
+    throw new Error('Chrome cookies API is not available');
+  }
+  const cookie = await chrome.cookies.get({
+    url: QWEN_ORIGIN,
+    name: name,
+  });
+  return cookie ? cookie.value : null;
+}
+
+/**
+ * Sets a specific cookie for chat.qwen.ai.
  */
 async function setCookie(name: string, value: string): Promise<void> {
-  try {
-    await chrome.cookies.set({
-      url: QWEN_ORIGIN,
-      name: name,
-      value: value,
-      domain: 'chat.qwen.ai',
-      path: '/',
-      secure: true,
-      sameSite: 'lax',
-    });
-  } catch (e) {
-    console.error(`[Qwen Service] Failed to set cookie ${name}:`, e);
-    throw e;
+  if (typeof chrome === 'undefined' || !chrome.cookies) {
+    throw new Error('Chrome cookies API is not available');
   }
+  await chrome.cookies.set({
+    url: QWEN_ORIGIN,
+    name: name,
+    value: value,
+    domain: 'chat.qwen.ai',
+    path: '/',
+    secure: true,
+    sameSite: 'lax',
+  });
 }
 
 /**
  * Retrieves the active JWT token from cookies or localStorage
  */
 export async function getQwenToken(): Promise<string | null> {
-  // 1. First, check the cookie jar (extremely direct)
-  let token = await getCookie('token');
+  // 1. First, check the cookie jar (extremely direct). getCookie throws when
+  // the cookies API is unavailable — treat that as "no cookie" so the
+  // localStorage fallback still runs.
+  let token: string | null = null;
+  try {
+    token = await getCookie('token');
+  } catch (e) {
+    console.warn('[Qwen Service] Cookie lookup failed, falling back to localStorage:', e);
+  }
   if (token) {
     return token;
   }
@@ -116,12 +134,7 @@ export async function createQwenSession(token: string): Promise<string | null> {
         'content-type': 'application/json',
         'source': 'web',
         'version': '0.2.63',
-        'timezone': (() => {
-          const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'longOffset' })
-            .formatToParts(new Date());
-          const tz = parts.find(p => p.type === 'timeZoneName')?.value ?? 'GMT+0000';
-          return tz.replace(/^GMT([+-])(\d{2}):(\d{2})$/, 'GMT$1$2$3');
-        })(),
+        'timezone': formatTimezone(),
         'x-request-id': crypto.randomUUID(),
       },
       body: JSON.stringify({
@@ -162,14 +175,15 @@ function buildQwenMessagesPayload(messages: QwenMessage[]) {
   // Combine system prompts and chat history into one giant prompt
   let combinedPrompt = '';
   for (const msg of messages) {
+    const content = msg.content ?? '';
     if (msg.role === 'system') {
-      combinedPrompt += `[System Instruction]\n${msg.content}\n\n`;
+      combinedPrompt += `[System Instruction]\n${content}\n\n`;
     } else if (msg.role === 'user') {
-      combinedPrompt += `User: ${msg.content}\n\n`;
+      combinedPrompt += `User: ${content}\n\n`;
     } else if (msg.role === 'assistant') {
-      combinedPrompt += `Assistant: ${msg.content}\n\n`;
+      combinedPrompt += `Assistant: ${content}\n\n`;
     } else if (msg.role === 'tool') {
-      combinedPrompt += `[Tool Result]: ${msg.content}\n\n`;
+      combinedPrompt += `[Tool Result]: ${content}\n\n`;
     }
   }
 
@@ -308,12 +322,7 @@ export async function sendQwenChatStream(
         'token': token,
         'bx-v': '2.5.36',
         'version': '0.2.63',
-        'timezone': (() => {
-          const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'longOffset' })
-            .formatToParts(new Date());
-          const tz = parts.find(p => p.type === 'timeZoneName')?.value ?? 'GMT+0000';
-          return tz.replace(/^GMT([+-])(\d{2}):(\d{2})$/, 'GMT$1$2$3');
-        })(),
+        'timezone': formatTimezone(),
         'x-request-id': crypto.randomUUID(),
         'x-accel-buffering': 'no',
       },
@@ -350,6 +359,7 @@ export async function sendQwenChatStream(
 
         const dataStr = trimmed.slice(6);
         if (dataStr === '[DONE]') {
+          reader.cancel().catch(() => {});
           wrappedOnDone();
           return;
         }

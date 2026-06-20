@@ -118,8 +118,7 @@ export default defineBackground(() => {
             type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
             requestHeaders: [
               { header: 'origin', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'https://chat.qwen.ai' },
-              { header: 'referer', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'https://chat.qwen.ai/' },
-              { header: 'host', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'chat.qwen.ai' }
+              { header: 'referer', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'https://chat.qwen.ai/' }
             ]
           },
           condition: {

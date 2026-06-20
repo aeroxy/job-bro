@@ -294,10 +294,11 @@ function processFields(fields: string[]): any[] {
     // Replace hash fields
     for (const [index, type] of Object.entries(HASH_FIELDS)) {
         const idx = parseInt(index);
+        if (processed[idx] === undefined) continue;
 
         if (type === 'split') {
             // Field 16: Format is "count|hash", only replace the hash part
-            const parts = processed[idx].split('|');
+            const parts = String(processed[idx]).split('|');
             if (parts.length === 2) {
                 processed[idx] = `${parts[0]}|${randomHash()}`;
             }

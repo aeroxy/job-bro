@@ -174,8 +174,6 @@ export default function App() {
     )
   }
 
-
-
   if (tabView.name === 'resume') {
     return (
       <ResumeView
@@ -232,7 +230,6 @@ export default function App() {
           >
             <Settings className="size-3.5" />
           </Button>
-
         </div>
       </header>
 
