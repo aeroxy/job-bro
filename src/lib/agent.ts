@@ -193,9 +193,12 @@ export async function runAgent(
     }
 
     if (!response.tool_calls?.length) {
-      // No tool calls. If we expected a verdict, nudge and loop instead of
-      // accepting plain-text content; the 10-iteration ceiling still bounds.
-      if (hasVerdict) {
+      // No tool calls. If we expected a verdict, nudge and loop — but only
+      // if there's a turn left for the model to answer the nudge. On the
+      // final iteration, continuing would just burn the slot and fall
+      // through to the "exceeded iterations" throw, so accept the plain
+      // text and let the parser try.
+      if (hasVerdict && i < maxIterations - 1) {
         working.push({ role: 'assistant', content: response.content || ' ' })
         working.push({ role: 'user', content: `<system-reminder>\nYou must call the \`${verdictName}\` tool to submit your final answer. Do not write it as plain text.\n</system-reminder>` })
         continue

@@ -473,12 +473,22 @@ export async function sendQwenChatStream(
     }
   };
 
+  // Only one of wrappedOnDone / wrappedOnError may fire per stream. Idle
+  // watchdog and reader-cancel race: cancelling the reader resolves
+  // reader.read() with { done: true }, which the loop would interpret as a
+  // normal end-of-stream and call wrappedOnDone right after wrappedOnError.
+  let streamEnded = false;
+
   const wrappedOnDone = () => {
+    if (streamEnded) return;
+    streamEnded = true;
     cleanupHeartbeat();
     onDone();
   };
 
   const wrappedOnError = (err: string) => {
+    if (streamEnded) return;
+    streamEnded = true;
     cleanupHeartbeat();
     onError(err);
   };
