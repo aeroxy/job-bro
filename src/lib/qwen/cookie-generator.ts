@@ -291,7 +291,7 @@ function processFields(fields: string[]): (string | number)[] {
         } else if (type === 'full') {
             // Completely replace with random hash
             if (idx === 36) {
-                // 字段36: Document attributes hash（10-100的随机整数）
+                // Field 36: Document attributes hash (random integer from 10 to 100)
                 processed[idx] = Math.floor(Math.random() * 91) + 10;
             } else {
                 processed[idx] = randomHash();
