@@ -351,10 +351,6 @@ function generateBatch(count: number = 10, realData: string | null = null, finge
     return results;
 }
 
-// ==================== Main ====================
-
-
-
 // ==================== Exports ====================
 
 export {
