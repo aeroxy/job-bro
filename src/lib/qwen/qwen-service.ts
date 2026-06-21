@@ -176,8 +176,8 @@ export async function getQwenDeviceId(): Promise<string> {
 // random fallback UUID between the two steps).
 async function acquireReadLock<T>(fn: () => Promise<T>): Promise<T> {
   while (deviceReadLock) await deviceReadLock;
-  const p = fn().catch((e) => { deviceReadLock = null; throw e; });
-  deviceReadLock = p.then(() => undefined, () => undefined);
+  const p = fn();
+  deviceReadLock = p;
   try {
     return await p;
   } finally {
