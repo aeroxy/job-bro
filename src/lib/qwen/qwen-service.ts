@@ -74,22 +74,7 @@ export async function getQwenToken(): Promise<string | null> {
       const results = await chrome.scripting.executeScript({
         target: { tabId: tabs[0].id },
         func: () => {
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            const value = localStorage.getItem(key || '');
-            if (value && value.includes('eyJ')) {
-              try {
-                const parsed = JSON.parse(value);
-                if (typeof parsed === 'string' && parsed.startsWith('eyJ')) {
-                  return parsed;
-                }
-                return parsed.token || parsed.accessToken || parsed.access_token || value;
-              } catch {
-                if (value.startsWith('eyJ')) return value;
-              }
-            }
-          }
-          return null;
+          return localStorage.getItem('token');
         },
       });
       if (results && results[0]?.result) {
