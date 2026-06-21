@@ -80,7 +80,11 @@ export async function getQwenToken(): Promise<string | null> {
       if (results && results[0]?.result) {
         token = results[0].result;
         if (token) {
-          await setCookie('token', token);
+          try {
+            await setCookie('token', token);
+          } catch (cookieErr) {
+            console.warn('[Qwen Service] Failed to persist token cookie, continuing with extracted token:', cookieErr);
+          }
         }
         return token;
       }
