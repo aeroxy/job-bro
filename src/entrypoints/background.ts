@@ -115,15 +115,15 @@ export default defineBackground(() => {
           id: 1,
           priority: 1,
           action: {
-            type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
+            type: 'modifyHeaders' as unknown as chrome.declarativeNetRequest.RuleActionType,
             requestHeaders: [
-              { header: 'origin', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'https://chat.qwen.ai' },
-              { header: 'referer', operation: chrome.declarativeNetRequest.HeaderOperation.SET, value: 'https://chat.qwen.ai/' }
+              { header: 'origin', operation: 'set' as unknown as chrome.declarativeNetRequest.HeaderOperation, value: 'https://chat.qwen.ai' },
+              { header: 'referer', operation: 'set' as unknown as chrome.declarativeNetRequest.HeaderOperation, value: 'https://chat.qwen.ai/' }
             ]
           },
           condition: {
             urlFilter: 'https://chat.qwen.ai/api/*',
-            resourceTypes: [chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST],
+            resourceTypes: ['xmlhttprequest' as unknown as chrome.declarativeNetRequest.ResourceType],
             initiatorDomains: [chrome.runtime.id]
           }
         }
