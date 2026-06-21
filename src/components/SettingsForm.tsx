@@ -265,6 +265,7 @@ export function SettingsForm({
                     <Key className="size-3" /> Auth Status
                   </span>
                   <button
+                    type="button"
                     onClick={handleCheckQwenToken}
                     disabled={checkingQwenToken}
                     className="text-[9px] text-blue-500 hover:underline cursor-pointer flex items-center gap-0.5"
@@ -295,6 +296,7 @@ export function SettingsForm({
                     <Fingerprint className="size-3" /> Device Identity
                   </span>
                   <button
+                    type="button"
                     onClick={handleUpdateQwenFingerprint}
                     disabled={updatingQwenFingerprint}
                     className="text-[9px] text-blue-500 hover:underline cursor-pointer flex items-center gap-0.5"

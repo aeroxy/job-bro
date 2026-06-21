@@ -293,14 +293,22 @@ async function retry<T extends object>(
     // calls.
     const lastMessage = history[history.length - 1]
     const verdictCall = lastMessage?.tool_calls?.find((c) => c.function.name === verdictName)
-    retryMessages = [
-      ...history,
-      {
-        role: 'tool',
-        tool_call_id: verdictCall?.id ?? 'verdict',
-        content: `${errorMessage}. Please call \`${verdictName}\` again with the corrected JSON.`,
-      } as ChatMessage,
-    ]
+    if (verdictCall) {
+      retryMessages = [
+        ...history,
+        {
+          role: 'tool',
+          tool_call_id: verdictCall.id,
+          content: `${errorMessage}. Please call \`${verdictName}\` again with the corrected JSON.`,
+        } as ChatMessage,
+      ]
+    } else {
+      retryMessages = [
+        ...history,
+        { role: 'assistant', content: badResponse },
+        { role: 'user', content: `${errorMessage}. Fix it and output compact JSON only.` },
+      ]
+    }
   } else {
     retryMessages = [
       ...history,
