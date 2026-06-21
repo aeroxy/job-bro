@@ -122,10 +122,11 @@ export async function chatCompletion(
   // Offscreen documents don't have `chrome.cookies`, so detect that
   // context and bridge the request to the background service worker.
   if (config.backend === 'qwen-chat') {
+    const qwenMessages = messages.map(({ role, content }) => ({ role, content }));
     if (typeof chrome !== 'undefined' && !chrome.cookies) {
       const resp = await chrome.runtime.sendMessage({
         type: 'QWEN_CHAT_REQUEST',
-        messages,
+        messages: qwenMessages,
       });
       if (!resp?.ok) {
         if (resp?.isAbort) {
@@ -135,7 +136,7 @@ export async function chatCompletion(
       }
       return resp.result;
     }
-    return sendQwenChat(messages as any, options?.signal);
+    return sendQwenChat(qwenMessages, options?.signal);
   }
 
   const queue = getQueue(config.base_url)
