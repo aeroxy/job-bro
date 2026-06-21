@@ -97,6 +97,21 @@ Supporting modules:
 
 Execution context: the service uses `chrome.cookies` and `chrome.declarativeNetRequest`, which the offscreen document can't reach. `chatCompletion` in `llm-client.ts` detects the offscreen context (`!chrome.cookies`) and bridges the call to the background via `QWEN_CHAT_REQUEST`; the background handler forwards to `sendQwenChat`.
 
+### Known limitations
+
+**Offscreen abort signals don't propagate to the background.** When `chatCompletion` is called from the offscreen (the typical evaluator path), the `options.signal` is not forwarded across the `QWEN_CHAT_REQUEST` message — `AbortSignal` is a live object tied to the originating process's event loop and cannot be serialized through `chrome.runtime.sendMessage`. Current behavior:
+
+- The offscreen side awaits the response; if the caller aborts locally, the `await` rejects but the background fetch continues to completion.
+- If the user closes the tab or triggers `CANCEL_ANALYSIS`, the offscreen's controller is aborted but the in-flight background fetch is orphaned until Qwen's server closes the SSE stream or the service worker is recycled.
+
+A proper implementation would need:
+1.  A request-id field in `QWEN_CHAT_REQUEST`.
+2.  An `AbortController` registry in the background keyed by that id.
+3.  A new `QWEN_CANCEL_REQUEST` message type; the offscreen posts it when its local signal aborts.
+4.  The background resolves the matching controller and calls `.abort()`, threading it into the fetch `signal`.
+
+Tracked as deferred work; low-priority because orphaned fetches are bounded by Qwen's stream length and the service worker's lifecycle.
+
 ---
 
 ## `agent.ts`
