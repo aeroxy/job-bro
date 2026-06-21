@@ -79,6 +79,9 @@ export async function getQwenToken(): Promise<string | null> {
             if (value && value.includes('eyJ')) {
               try {
                 const parsed = JSON.parse(value);
+                if (typeof parsed === 'string' && parsed.startsWith('eyJ')) {
+                  return parsed;
+                }
                 return parsed.token || parsed.accessToken || parsed.access_token || value;
               } catch {
                 if (value.startsWith('eyJ')) return value;
@@ -161,23 +164,6 @@ export async function getQwenDeviceId(): Promise<string> {
     return raw;
   };
 
-  const waitForTabComplete = (tabId: number, timeoutMs = 15000): Promise<void> =>
-    new Promise((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        chrome.tabs.onUpdated.removeListener(listener);
-        clearTimeout(timer);
-        resolve();
-      };
-      const listener = (id: number, info: chrome.tabs.TabChangeInfo) => {
-        if (id === tabId && info.status === 'complete') finish();
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-      const timer = setTimeout(finish, timeoutMs);
-    });
-
   // 1. Read the real ID from an open chat.qwen.ai tab's localStorage.
   try {
     const tabs = await chrome.tabs.query({ url: `${QWEN_ORIGIN}/*`, discarded: false });
@@ -185,17 +171,9 @@ export async function getQwenDeviceId(): Promise<string> {
       const tabId = tabs[0].id;
       let id = await readFromTab(tabId);
 
-      // 2. Tab open but key missing — reload so Qwen's client-side JS
-      //    re-runs its fingerprint init and writes a fresh key. Re-read
-      //    once the page reaches `complete`.
+      // 2. Tab open but key missing.
       if (!id) {
-        try {
-          await chrome.tabs.reload(tabId);
-          await waitForTabComplete(tabId);
-          id = await readFromTab(tabId);
-        } catch (e) {
-          console.warn('[Qwen Service] Tab reload for device ID failed:', e);
-        }
+        console.warn('[Qwen Service] Device ID key missing in open tab localStorage.');
       }
 
       if (id) {
@@ -326,6 +304,10 @@ export async function updateQwenCookies(): Promise<CookieResult> {
  */
 export async function createQwenSession(token: string): Promise<string | null> {
   try {
+    // Magic string 'New Chat' perfectly mirrors Qwen Studio's own native frontend
+    // behavior when creating a blank chat, ensuring our requests are indistinguishable
+    // from normal human user sessions on chat.qwen.ai.
+    const title = 'New Chat';
     console.log('[Qwen Service] Creating fresh chat session...');
     const response = await fetch(`${QWEN_ORIGIN}/api/v2/chats/new`, {
       method: 'POST',
@@ -339,10 +321,10 @@ export async function createQwenSession(token: string): Promise<string | null> {
         'x-request-id': crypto.randomUUID(),
       },
       body: JSON.stringify({
-        title: 'Job Bro Evaluation',
+        title,
         models: ['qwen3.7-max'],
         chat_mode: 'local',
-        chat_type: 't2i',
+        chat_type: 't2t',
         timestamp: Date.now(),
       }),
     });
