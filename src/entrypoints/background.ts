@@ -107,7 +107,7 @@ export default defineBackground(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
   // Register declarativeNetRequest session rules to spoof Qwen origin/referer
-  try {
+  if (typeof chrome !== 'undefined' && chrome.declarativeNetRequest) {
     chrome.declarativeNetRequest.updateSessionRules({
       removeRuleIds: [1],
       addRules: [
@@ -133,8 +133,8 @@ export default defineBackground(() => {
     }).catch((e) => {
       console.error('[Job Bro] Failed to register Qwen net rules:', e);
     });
-  } catch (e) {
-    console.error('[Job Bro] declarativeNetRequest not supported or failed:', e);
+  } else {
+    console.error('[Job Bro] declarativeNetRequest not supported');
   }
 
   ensureOffscreen().catch((e) => console.warn('[Job Bro] Offscreen create failed', e))
