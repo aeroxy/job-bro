@@ -1,4 +1,5 @@
 import { generateCookies, type CookieResult } from './cookie-generator';
+import { generateDeviceId } from './fingerprint';
 
 const QWEN_ORIGIN = 'https://chat.qwen.ai';
 
@@ -195,9 +196,7 @@ export async function getQwenDeviceId(): Promise<string> {
 
   // 4. Fresh random ID (matches fingerprint.ts generateDeviceId shape).
   //    Last resort: creates an identity that diverges from Qwen's own JS.
-  const array = new Uint8Array(20);
-  crypto.getRandomValues(array);
-  const id = Array.from(array, (byte) => (byte & 15).toString(16)).join('');
+  const id = generateDeviceId();
   try {
     await chrome.storage.local.set({ [STORAGE_KEY]: id });
   } catch {}

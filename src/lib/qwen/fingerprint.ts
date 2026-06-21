@@ -83,9 +83,7 @@ const LANGUAGE_PRESETS: Record<string, LanguagePreset> = {
 };
 
 function generateDeviceId(): string {
-    const array = new Uint8Array(20);
-    crypto.getRandomValues(array);
-    return Array.from(array, (byte) => (byte & 15).toString(16)).join('');
+    return crypto.randomUUID();
 }
 
 function generateHash(): number {
