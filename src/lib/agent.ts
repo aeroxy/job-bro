@@ -201,7 +201,7 @@ export async function runAgent(
       // accepting plain-text content; the 10-iteration ceiling still bounds.
       if (hasVerdict) {
         working.push({ role: 'assistant', content: response.content || ' ' })
-        working.push({ role: 'user', content: `You must call the \`${verdictName}\` tool to submit your final answer. Do not write it as plain text.` })
+        working.push({ role: 'user', content: `<system-reminder>\nYou must call the \`${verdictName}\` tool to submit your final answer. Do not write it as plain text.\n</system-reminder>` })
         continue
       }
       return { content: response.content, messages: working }
@@ -249,10 +249,15 @@ export async function runAgentWithValidation<T extends object>(
 ): Promise<T> {
   const { validate, verdictName, ...agentOpts } = options
 
-  // Inject the verdict instruction once. The history returned by runAgent
-  // carries it, so the retry path (which reuses history) doesn't re-inject.
+  // Inject the verdict instruction once, as a user message wrapped in
+  // <system-reminder> — the project's convention for out-of-band directives.
+  // We deliberately avoid appending a `role: 'system'` message to the
+  // transcript because strict providers (Anthropic, some Mistral / Gemini
+  // endpoints) reject system messages that aren't at position 0 with
+  // 400 INVALID_ARGUMENT. The history returned by runAgent carries this
+  // message, so the retry path (which reuses history) doesn't re-inject.
   const initial: ChatMessage[] = verdictName
-    ? [...messages, { role: 'system', content: `To submit your final answer, call the \`${verdictName}\` tool with the verdict object as its arguments. The turn only ends when you call it — do not write the answer as plain text.` }]
+    ? [...messages, { role: 'user', content: `<system-reminder>\nTo submit your final answer, call the \`${verdictName}\` tool with the verdict object as its arguments. The turn only ends when you call it — do not write the answer as plain text.\n</system-reminder>` }]
     : messages
 
   // Reuse the agent's accumulated transcript (tool calls + results) on retry so

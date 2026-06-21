@@ -221,13 +221,24 @@ function buildQwenMessagesPayload(messages: QwenMessage[]) {
  * Resolves to the final accumulated string (excluding thinking/search output).
  */
 export async function sendQwenChat(messages: QwenMessage[], signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException('The user aborted a request.', 'AbortError'));
+  }
   return new Promise((resolve, reject) => {
     let fullContent = '';
+    const onAbort = () => {
+      reject(new DOMException('The user aborted a request.', 'AbortError'));
+    };
+    if (signal) signal.addEventListener('abort', onAbort);
     sendQwenChatStream(
       messages,
       (text) => { fullContent += text; },
-      () => resolve(fullContent),
+      () => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+        resolve(fullContent);
+      },
       (err) => {
+        if (signal) signal.removeEventListener('abort', onAbort);
         if (signal?.aborted || err === 'The user aborted a request.' || err === 'Request aborted') {
           reject(new DOMException('The user aborted a request.', 'AbortError'));
         } else {
