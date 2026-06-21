@@ -96,6 +96,7 @@ export function SettingsForm({
   }, [])
 
   useEffect(() => {
+    let active = true
     if (providerMode === 'qwen-chat') {
       handleCheckQwenToken()
       // Surface the active device ID (sourced from Qwen's own localStorage
@@ -104,6 +105,7 @@ export function SettingsForm({
       // Identity card agree on first render.
       getQwenDeviceId()
         .then((id) => {
+          if (!active) return
           setQwenDeviceId(id)
           try {
             const cookies = generateCookies(null, { deviceId: id })
@@ -111,6 +113,9 @@ export function SettingsForm({
           } catch {}
         })
         .catch(() => {})
+    }
+    return () => {
+      active = false
     }
   }, [providerMode, handleCheckQwenToken])
 

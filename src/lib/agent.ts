@@ -157,9 +157,6 @@ export async function runAgent(
   // Split out the structured-output channel (provide_verdict) from research
   // tools. The channel survives past MAX_TOOL_ROUNDS; research tools do not.
   const hasVerdict = !!verdictName && tools.some((t) => t.function.name === verdictName)
-  const researchToolCount = hasVerdict
-    ? tools.filter((t) => t.function.name !== verdictName).length
-    : tools.length
   const verdictOnlyTools = hasVerdict ? tools.filter((t) => t.function.name === verdictName) : []
 
   for (let i = 0; i < maxIterations; i++) {
@@ -173,8 +170,7 @@ export async function runAgent(
     // (e.g. Anthropic in thinking mode) reject 'required'. The nudge loop
     // handles the case where the model emits plain text instead of calling
     // provide_verdict.
-    const verdictOnly = hasVerdict && (researchToolCount === 0 || i >= MAX_TOOL_ROUNDS)
-    const activeTools = verdictOnly ? verdictOnlyTools : tools
+    const activeTools = i < MAX_TOOL_ROUNDS ? tools : (hasVerdict ? verdictOnlyTools : [])
     const response = await chatCompletionWithTools(config, working, { tools: activeTools, signal, jsonSchema })
 
     // The structured-output channel is terminal: extract the provide_verdict

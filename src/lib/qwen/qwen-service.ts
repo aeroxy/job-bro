@@ -123,8 +123,8 @@ export async function getQwenToken(): Promise<string | null> {
  *      `complete`, and re-read.
  *   3. Fall back to a value we've previously persisted in
  *      `chrome.storage.local` under `qwen_device_id`.
- *   4. Generate a fresh 20-hex-char crypto-random ID (matches the shape
- *      `fingerprint.ts`'s `generateDeviceId` produces). **Last resort:**
+  *   4. Generate a fresh crypto-random UUID (matches the shape
+  *      `fingerprint.ts`'s `generateDeviceId` produces). **Last resort:**
  *      this creates an identity that diverges from whatever Qwen's JS will
  *      generate next time it initializes — a bot signal if both end up in
  *      server logs from the same IP. Only reached when no tab is open and
@@ -194,7 +194,7 @@ export async function getQwenDeviceId(): Promise<string> {
     // chrome.storage unavailable — continue to fallback generation.
   }
 
-  // 4. Fresh random ID (matches fingerprint.ts generateDeviceId shape).
+  // 4. Fresh random UUID (matches fingerprint.ts generateDeviceId shape).
   //    Last resort: creates an identity that diverges from Qwen's own JS.
   const id = generateDeviceId();
   try {
