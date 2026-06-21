@@ -2,7 +2,7 @@ import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, Ale
 import { useState, useEffect, useCallback, ReactNode } from 'react'
 
 import { QwenIcon } from '@/components/icons/QwenIcon'
-import { getQwenToken, getQwenDeviceId, updateQwenCookies, refreshQwenDeviceId } from '@/lib/qwen/qwen-service'
+import { getQwenToken, getCachedQwenDeviceId, getQwenDeviceId, updateQwenCookies, refreshQwenDeviceId } from '@/lib/qwen/qwen-service'
 import { generateCookies } from '@/lib/qwen/cookie-generator'
 
 import { Button } from '@/components/ui/button'
@@ -99,13 +99,12 @@ export function SettingsForm({
     let active = true
     if (providerMode === 'qwen-chat') {
       handleCheckQwenToken()
-      // Surface the active device ID (sourced from Qwen's own localStorage
-      // or extension-storage cache) and generate an initial fingerprint
-      // preview *using that same device ID*, so the two rows of the
-      // Identity card agree on first render.
-      getQwenDeviceId()
+      // Passive preview: read-only cache lookup only. Defers the full
+      // getQwenDeviceId() (which can generate+persist a random fallback)
+      // to the explicit Update flow via handleUpdateQwenFingerprint.
+      getCachedQwenDeviceId()
         .then((id) => {
-          if (!active) return
+          if (!active || !id) return
           setQwenDeviceId(id)
           try {
             const cookies = generateCookies(null, { deviceId: id })
@@ -218,7 +217,7 @@ export function SettingsForm({
             />
           </div>
 
-          {chromeAi.status === 'unavailable' && (
+          {providerMode === 'chrome' && chromeAi.status === 'unavailable' && (
             <p className="text-[10px] text-muted-foreground">
               Chrome built-in AI requires Chrome 127+ with Gemini Nano enabled at{' '}
               <code className="text-[10px]">chrome://flags/#prompt-api-for-gemini-nano</code>.

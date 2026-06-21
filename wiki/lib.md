@@ -92,8 +92,13 @@ Why it exists: lets users run evaluations without an API key or a self-hosted pr
 
 Supporting modules:
 
-- `qwen/cookie-generator.ts` — LZW-compresses and custom-base64-encodes a 37-field fingerprint into the `ssxmod_itna` / `ssxmod_itna2` cookies Qwen's anti-bot checks require. Hash fields are re-randomized on every call; the timestamp field is refreshed to `Date.now()`.
-- `qwen/fingerprint.ts` — Generates the default 37-field template (device id, SDK version, platform, screen info, WebGL renderer, etc.) with presets for `macIntel` / `macM1` / `win64` / `linux` and common screen sizes.
+### `qwen/cookie-generator.ts`
+
+LZW-compresses and custom-base64-encodes a 37-field fingerprint into the `ssxmod_itna` / `ssxmod_itna2` cookies Qwen's anti-bot checks require. Hash fields are re-randomized on every call; the timestamp field is refreshed to `Date.now()`.
+
+### `qwen/fingerprint.ts`
+
+Generates the default 37-field template (device id, SDK version, platform, screen info, WebGL renderer, etc.) with presets for `macIntel` / `macM1` / `win64` / `linux` and common screen sizes.
 
 Execution context: the service uses `chrome.cookies` and `chrome.declarativeNetRequest`, which the offscreen document can't reach. `chatCompletion` in `llm-client.ts` detects the offscreen context (`!chrome.cookies`) and bridges the call to the background via `QWEN_CHAT_REQUEST`; the background handler forwards to `sendQwenChat`.
 
