@@ -100,23 +100,19 @@ export async function getQwenToken(): Promise<string | null> {
  * device IDs from the same IP would be a bot signal.
  *
  * Resolution order:
- *   1. Read `qwen_chat_device_id` from an open, non-discarded `chat.qwen.ai`
+ *   1. Cached value from `chrome.storage.local` (`qwen_device_id`). The device
+ *      ID is stable per browser profile; `refreshQwenDeviceId()` invalidates
+ *      this cache before re-reading from the tab.
+ *   2. Read `qwen_chat_device_id` from an open, non-discarded `chat.qwen.ai`
  *      tab's localStorage via `chrome.scripting.executeScript`.
- *   2. If a tab is open but the key is missing (Qwen code change, user logged
- *      out and cleared storage, or manual deletion): reload the tab — Qwen's
- *      own client-side JS regenerates the key on page init — wait for
- *      `complete`, and re-read.
- *   3. Fall back to a value we've previously persisted in
- *      `chrome.storage.local` under `qwen_device_id`.
-  *   4. Generate a fresh crypto-random UUID (matches the shape
-  *      `fingerprint.ts`'s `generateDeviceId` produces). **Last resort:**
+ *   3. Generate a fresh crypto-random UUID (matches the shape
+ *      `fingerprint.ts`'s `generateDeviceId` produces). **Last resort:**
  *      this creates an identity that diverges from whatever Qwen's JS will
  *      generate next time it initializes — a bot signal if both end up in
- *      server logs from the same IP. Only reached when no tab is open and
- *      no cached value exists.
+ *      server logs from the same IP. Only reached when no cache and no tab.
  *
- * Whichever path succeeds is persisted back to `chrome.storage.local` so
- * subsequent calls skip the tab-injection step when no tab is open.
+ * Whichever path succeeds (2 or 3) is persisted back to
+ * `chrome.storage.local` so subsequent calls hit the cache fast path.
  */
 export async function getQwenDeviceId(): Promise<string> {
   const STORAGE_KEY = 'qwen_device_id';
@@ -125,62 +121,48 @@ export async function getQwenDeviceId(): Promise<string> {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: (key: string) => {
-        // Primary key; scan for likely aliases if the primary is missing so
-        // we stay correct if Qwen renames the key in a future deploy.
-        const direct = localStorage.getItem(key);
-        if (direct) return direct;
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && /device[_-]?id/i.test(k)) {
-            const v = localStorage.getItem(k);
-            if (v) return v;
-          }
-        }
-        return null;
+        const raw = localStorage.getItem(key);
+        if (raw === null) return null;
+        try {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed === 'string') return parsed;
+        } catch {}
+        return raw;
       },
       args: [LS_KEY],
     });
     const raw = results?.[0]?.result;
     if (typeof raw !== 'string' || raw.length === 0) return null;
-    // Qwen sometimes stores the ID raw and sometimes JSON-stringified.
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed === 'string') return parsed;
-    } catch {}
     return raw;
   };
 
-  // 1. Read the real ID from an open chat.qwen.ai tab's localStorage.
+  // 1. Cached value from a prior call — fast path. The device ID is stable
+  //    per browser profile; refreshQwenDeviceId() invalidates this cache
+  //    explicitly before re-reading from the tab.
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEY);
+    if (typeof stored[STORAGE_KEY] === 'string') return stored[STORAGE_KEY] as string;
+  } catch {
+    // chrome.storage unavailable — fall through to tab read.
+  }
+
+  // 2. Read the authoritative ID from an open chat.qwen.ai tab's localStorage.
   try {
     const tabs = await chrome.tabs.query({ url: `${QWEN_ORIGIN}/*`, discarded: false });
     if (tabs.length > 0 && tabs[0].id !== undefined) {
       const tabId = tabs[0].id;
-      let id = await readFromTab(tabId);
-
-      // 2. Tab open but key missing.
-      if (!id) {
-        console.warn('[Qwen Service] Device ID key missing in open tab localStorage.');
-      }
-
+      const id = await readFromTab(tabId);
       if (id) {
         await chrome.storage.local.set({ [STORAGE_KEY]: id });
         return id;
       }
+      console.warn('[Qwen Service] Device ID key missing in open tab localStorage.');
     }
   } catch (e) {
     console.warn('[Qwen Service] Failed to read device ID from tab localStorage:', e);
   }
 
-  // 3. Persisted value from a prior call.
-  try {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    if (typeof stored[STORAGE_KEY] === 'string') return stored[STORAGE_KEY] as string;
-  } catch {
-    // chrome.storage unavailable — continue to fallback generation.
-  }
-
-  // 4. Fresh random UUID (matches fingerprint.ts generateDeviceId shape).
-  //    Last resort: creates an identity that diverges from Qwen's own JS.
+  // 3. Fresh random UUID (last resort — diverges from Qwen's own JS).
   const id = generateDeviceId();
   try {
     await chrome.storage.local.set({ [STORAGE_KEY]: id });
