@@ -100,12 +100,17 @@ export function SettingsForm({
       handleCheckQwenToken()
       // Surface the active device ID (sourced from Qwen's own localStorage
       // or extension-storage cache) and generate an initial fingerprint
-      // preview for display.
-      getQwenDeviceId().then(setQwenDeviceId).catch(() => {})
-      try {
-        const cookies = generateCookies()
-        setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
-      } catch {}
+      // preview *using that same device ID*, so the two rows of the
+      // Identity card agree on first render.
+      getQwenDeviceId()
+        .then((id) => {
+          setQwenDeviceId(id)
+          try {
+            const cookies = generateCookies(null, { deviceId: id })
+            setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
+          } catch {}
+        })
+        .catch(() => {})
     }
   }, [providerMode, handleCheckQwenToken])
 

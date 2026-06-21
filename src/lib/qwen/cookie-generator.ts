@@ -1,4 +1,4 @@
-import { generateFingerprint, type FingerprintOptions } from './fingerprint';
+import { generateFingerprint, generateDeviceId, generateHash as randomHash, type FingerprintOptions } from './fingerprint';
 
 export interface CookieResult {
     ssxmod_itna: string;
@@ -264,20 +264,6 @@ function customEncode(data: string | null, urlSafe: boolean): string {
     }
 
     return compressed;
-}
-
-// ==================== Helper Functions ====================
-
-function randomHash(): number {
-    const array = new Uint32Array(1);
-    crypto.getRandomValues(array);
-    return array[0];
-}
-
-function generateDeviceId(): string {
-    const array = new Uint8Array(20);
-    crypto.getRandomValues(array);
-    return Array.from(array, (byte) => (byte & 15).toString(16)).join('');
 }
 
 // ==================== Data Parsing and Processing ====================
