@@ -99,7 +99,7 @@ export function SettingsForm({
 
   const canSave = providerMode !== 'api'
     ? true
-    : !!config.base_url.trim() && !!config.model.trim()
+    : !!config.base_url?.trim() && !!config.model?.trim()
 
   const handleProfileSwitch = (id: string) => {
     if (id === '__new__') {
