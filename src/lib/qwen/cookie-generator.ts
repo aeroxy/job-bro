@@ -1,4 +1,4 @@
-import { generateFingerprint } from './fingerprint';
+import { generateFingerprint, type FingerprintOptions } from './fingerprint';
 
 export interface CookieResult {
     ssxmod_itna: string;
@@ -23,7 +23,7 @@ const HASH_FIELDS = {
 
 // ==================== LZW Compression Algorithm ====================
 
-function lzwCompress(data: string | null, bits: number, charFunc: Function): string {
+function lzwCompress(data: string | null, bits: number, charFunc: (index: number) => string): string {
     if (data == null) return '';
 
     let dict: Record<string, number> = {};
@@ -287,8 +287,8 @@ function parseRealData(realData: string): string[] {
     return fields;
 }
 
-function processFields(fields: string[]): any[] {
-    const processed: any[] = [...fields];
+function processFields(fields: string[]): (string | number)[] {
+    const processed: (string | number)[] = [...fields];
     const currentTimestamp = Date.now();
 
     // Replace hash fields
@@ -320,7 +320,7 @@ function processFields(fields: string[]): any[] {
 
 // ==================== Cookie Generation ====================
 
-function generateCookies(realData: string | null = null, fingerprintOptions: any = {}): CookieResult {
+function generateCookies(realData: string | null = null, fingerprintOptions: FingerprintOptions = {}): CookieResult {
     // Use passed fingerprint or generate a new random one
     const fingerprint = realData || generateFingerprint(fingerprintOptions);
 
@@ -351,13 +351,13 @@ function generateCookies(realData: string | null = null, fingerprintOptions: any
     return {
         ssxmod_itna,
         ssxmod_itna2,
-        timestamp: parseInt(processedFields[33]),
+        timestamp: Number(processedFields[33]),
         rawData: ssxmod_itna_data,
         rawData2: ssxmod_itna2_data
     };
 }
 
-function generateBatch(count: number = 10, realData: string | null = null, fingerprintOptions: any = {}): CookieResult[] {
+function generateBatch(count: number = 10, realData: string | null = null, fingerprintOptions: FingerprintOptions = {}): CookieResult[] {
     const results: CookieResult[] = [];
     for (let i = 0; i < count; i++) {
         results.push(generateCookies(realData, fingerprintOptions));
