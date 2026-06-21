@@ -19,3 +19,4 @@ Enriched project context:
 - [components.md](wiki/components.md) — React hooks (useAnalysis, useProfile, useResumeGenerator, useHistory) and UI components
 - [lib.md](wiki/lib.md) — LLM client, storage wrappers, IndexedDB, download utilities, LinkedIn extractor
 - [workflows.md](wiki/workflows.md) — Step-by-step flows for analysis, resume generation, settings, history, error handling
+- [qwen-studio.md](wiki/qwen-studio.md) — Why Qwen Studio is selected
