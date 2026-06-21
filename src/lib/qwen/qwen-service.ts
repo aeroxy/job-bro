@@ -227,7 +227,13 @@ export async function sendQwenChat(messages: QwenMessage[], signal?: AbortSignal
       messages,
       (text) => { fullContent += text; },
       () => resolve(fullContent),
-      (err) => reject(new Error(err)),
+      (err) => {
+        if (signal?.aborted || err === 'The user aborted a request.' || err === 'Request aborted') {
+          reject(new DOMException('The user aborted a request.', 'AbortError'));
+        } else {
+          reject(new Error(err));
+        }
+      },
       signal
     );
   });
@@ -272,7 +278,7 @@ export async function sendQwenChatStream(
 
   if (signal && signal.aborted) {
     cleanupHeartbeat();
-    onError('Request aborted');
+    onError('The user aborted a request.');
     return;
   }
 
@@ -349,7 +355,9 @@ export async function sendQwenChatStream(
       const { value, done } = await reader.read();
       if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+      }
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 

@@ -128,6 +128,9 @@ export async function chatCompletion(
         messages,
       });
       if (!resp?.ok) {
+        if (resp?.isAbort) {
+          throw new DOMException('The user aborted a request.', 'AbortError');
+        }
         throw new Error(resp?.error || 'Failed to delegate Qwen Chat request to background.');
       }
       return resp.result;

@@ -233,7 +233,7 @@ export default defineBackground(() => {
       const msgs = (message as any).messages;
       sendQwenChat(msgs)
         .then((result) => sendResponse({ ok: true, result }))
-        .catch((e) => sendResponse({ ok: false, error: e.message }));
+        .catch((e) => sendResponse({ ok: false, error: e.message, isAbort: (e as Error).name === 'AbortError' }));
       return true;
     }
 
