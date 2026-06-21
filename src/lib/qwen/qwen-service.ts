@@ -114,46 +114,93 @@ export async function getQwenToken(): Promise<string | null> {
  * Whichever path succeeds (2 or 3) is persisted back to
  * `chrome.storage.local` so subsequent calls hit the cache fast path.
  */
+
+const DEVICE_STORAGE_KEY = 'qwen_device_id';
+
+// Serializes tab-injection reads so concurrent callers (e.g. a refresh from
+// the Settings UI racing against an analysis's `updateQwenCookies`) can't
+// slip between cache invalidation and the tab read, which would otherwise
+// cause a cache miss to fall through to the random-UUID generator.
+let deviceReadLock: Promise<unknown> | null = null;
+
+export async function getCachedQwenDeviceId(): Promise<string | null> {
+  try {
+    const stored = await chrome.storage.local.get(DEVICE_STORAGE_KEY);
+    if (typeof stored[DEVICE_STORAGE_KEY] === 'string') return stored[DEVICE_STORAGE_KEY] as string;
+  } catch {}
+  return null;
+}
+
+const QWEN_LS_KEY = 'qwen_chat_device_id';
+
+async function readDeviceIdFromTab(tabId: number): Promise<string | null> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (key: string) => {
+      const raw = localStorage.getItem(key);
+      if (raw === null) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === 'string') return parsed;
+      } catch {}
+      return raw;
+    },
+    args: [QWEN_LS_KEY],
+  });
+  const raw = results?.[0]?.result;
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  return raw;
+}
+
 export async function getQwenDeviceId(): Promise<string> {
-  const STORAGE_KEY = 'qwen_device_id';
-  const LS_KEY = 'qwen_chat_device_id';
-  const readFromTab = async (tabId: number): Promise<string | null> => {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (key: string) => {
-        const raw = localStorage.getItem(key);
-        if (raw === null) return null;
-        try {
-          const parsed = JSON.parse(raw);
-          if (typeof parsed === 'string') return parsed;
-        } catch {}
-        return raw;
-      },
-      args: [LS_KEY],
-    });
-    const raw = results?.[0]?.result;
-    if (typeof raw !== 'string' || raw.length === 0) return null;
-    return raw;
-  };
 
   // 1. Cached value from a prior call — fast path. The device ID is stable
   //    per browser profile; refreshQwenDeviceId() invalidates this cache
   //    explicitly before re-reading from the tab.
   try {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    if (typeof stored[STORAGE_KEY] === 'string') return stored[STORAGE_KEY] as string;
+    const stored = await chrome.storage.local.get(DEVICE_STORAGE_KEY);
+    if (typeof stored[DEVICE_STORAGE_KEY] === 'string') return stored[DEVICE_STORAGE_KEY] as string;
   } catch {
     // chrome.storage unavailable — fall through to tab read.
   }
+
+  // 2-3. Slow path (tab read / UUID fallback). Serialized via deviceReadLock
+  //    so concurrent callers can't slip between refreshQwenDeviceId's cache
+  //    invalidation and its subsequent tab read.
+  return acquireReadLock(() => readOrGenerateDeviceId());
+}
+
+// Holds the lock across a critical section. Used by getQwenDeviceId's slow
+// path and by refreshQwenDeviceId (which invalidates + reads as one
+// atomic action so no concurrent call can populate the cache with a
+// random fallback UUID between the two steps).
+async function acquireReadLock<T>(fn: () => Promise<T>): Promise<T> {
+  while (deviceReadLock) await deviceReadLock;
+  const p = fn().catch((e) => { deviceReadLock = null; throw e; });
+  deviceReadLock = p.then(() => undefined, () => undefined);
+  try {
+    return await p;
+  } finally {
+    deviceReadLock = null;
+  }
+}
+
+async function readOrGenerateDeviceId(): Promise<string> {
+  // Re-check cache under the lock — a concurrent first call may have
+  // populated it while we were queued.
+  try {
+    const stored = await chrome.storage.local.get(DEVICE_STORAGE_KEY);
+    if (typeof stored[DEVICE_STORAGE_KEY] === 'string') return stored[DEVICE_STORAGE_KEY] as string;
+  } catch {}
 
   // 2. Read the authoritative ID from an open chat.qwen.ai tab's localStorage.
   try {
     const tabs = await chrome.tabs.query({ url: `${QWEN_ORIGIN}/*`, discarded: false });
     if (tabs.length > 0 && tabs[0].id !== undefined) {
       const tabId = tabs[0].id;
-      const id = await readFromTab(tabId);
+      const id = await readDeviceIdFromTab(tabId);
       if (id) {
-        await chrome.storage.local.set({ [STORAGE_KEY]: id });
+        await chrome.storage.local.set({ [DEVICE_STORAGE_KEY]: id });
         return id;
       }
       console.warn('[Qwen Service] Device ID key missing in open tab localStorage.');
@@ -165,7 +212,7 @@ export async function getQwenDeviceId(): Promise<string> {
   // 3. Fresh random UUID (last resort — diverges from Qwen's own JS).
   const id = generateDeviceId();
   try {
-    await chrome.storage.local.set({ [STORAGE_KEY]: id });
+    await chrome.storage.local.set({ [DEVICE_STORAGE_KEY]: id });
   } catch {}
   return id;
 }
@@ -180,8 +227,6 @@ export async function getQwenDeviceId(): Promise<string> {
  * rather than re-reading whatever was previously cached.
  */
 export async function refreshQwenDeviceId(): Promise<string> {
-  const STORAGE_KEY = 'qwen_device_id';
-
   // 1. Find a live tab or create one.
   let tabs = await chrome.tabs.query({ url: `${QWEN_ORIGIN}/*`, discarded: false });
   let tabId: number | undefined = tabs[0]?.id;
@@ -231,14 +276,15 @@ export async function refreshQwenDeviceId(): Promise<string> {
     }
   }
 
-  // 3. Invalidate the cache so getQwenDeviceId can't short-circuit on the
-  //    previously persisted value.
-  try {
-    await chrome.storage.local.remove(STORAGE_KEY);
-  } catch {}
-
-  // 4. Read fresh from the tab.
-  return getQwenDeviceId();
+  // 3. Invalidate the cache + read fresh. Lock held across both so a
+  //    concurrent getQwenDeviceId can't populate the cache with a random
+  //    fallback UUID between the invalidation and the tab read.
+  return acquireReadLock(async () => {
+    try {
+      await chrome.storage.local.remove(DEVICE_STORAGE_KEY);
+    } catch {}
+    return readOrGenerateDeviceId();
+  });
 }
 
 /**
@@ -278,6 +324,7 @@ export async function createQwenSession(token: string): Promise<string | null> {
     const response = await fetch(`${QWEN_ORIGIN}/api/v2/chats/new`, {
       method: 'POST',
       credentials: 'include',
+      signal: AbortSignal.timeout(15_000),
       headers: {
         'authorization': `Bearer ${token}`,
         'content-type': 'application/json',
@@ -442,6 +489,14 @@ export async function sendQwenChatStream(
     return;
   }
 
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearIdleTimer = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = undefined;
+    }
+  };
+
   try {
     // 1. Refresh security cookies
     await updateQwenCookies();
@@ -511,9 +566,23 @@ export async function sendQwenChatStream(
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // Idle watchdog — if no data arrives within this window, treat as stall
+    // and tear the stream down (the 10s QWEN_PING keep-alive does not
+    // protect the reader itself).
+    const IDLE_TIMEOUT_MS = 60_000;
+    const resetIdleTimer = () => {
+      clearIdleTimer();
+      idleTimer = setTimeout(() => {
+        reader.cancel().catch(() => {});
+        wrappedOnError('Stream idle timeout: no data received for 60s');
+      }, IDLE_TIMEOUT_MS);
+    };
+    resetIdleTimer();
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
+      resetIdleTimer();
 
       if (value) {
         buffer += decoder.decode(value, { stream: true });
@@ -527,6 +596,7 @@ export async function sendQwenChatStream(
 
         const dataStr = trimmed.slice(6);
         if (dataStr === '[DONE]') {
+          clearIdleTimer();
           reader.cancel().catch(() => {});
           wrappedOnDone();
           return;
@@ -535,6 +605,7 @@ export async function sendQwenChatStream(
         try {
           const chunkPayload = JSON.parse(dataStr);
           if (chunkPayload.error) {
+            clearIdleTimer();
             reader.cancel().catch(() => {});
             wrappedOnError(
               typeof chunkPayload.error.message === 'string'
@@ -552,6 +623,8 @@ export async function sendQwenChatStream(
         }
       }
     }
+
+    clearIdleTimer();
 
     // Flush decoder + leftover buffer. No-op for well-formed streams that
     // ended on a `data: [DONE]\n` boundary (which the loop above handled).
@@ -580,6 +653,7 @@ export async function sendQwenChatStream(
 
     wrappedOnDone();
   } catch (e) {
+    clearIdleTimer();
     console.error('[Qwen Service] Exception in streaming execution:', e);
     wrappedOnError(e instanceof Error ? e.message : String(e));
   }
