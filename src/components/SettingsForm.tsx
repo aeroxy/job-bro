@@ -2,7 +2,7 @@ import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, Ale
 import { useState, useEffect, useCallback, ReactNode } from 'react'
 
 import { QwenIcon } from '@/components/icons/QwenIcon'
-import { getQwenToken, updateQwenCookies } from '@/lib/qwen/qwen-service'
+import { getQwenToken, getQwenDeviceId, updateQwenCookies, refreshQwenDeviceId } from '@/lib/qwen/qwen-service'
 import { generateCookies } from '@/lib/qwen/cookie-generator'
 
 import { Button } from '@/components/ui/button'
@@ -61,6 +61,7 @@ export function SettingsForm({
   const [checkingQwenToken, setCheckingQwenToken] = useState(false)
   const [updatingQwenFingerprint, setUpdatingQwenFingerprint] = useState(false)
   const [qwenFingerprint, setQwenFingerprint] = useState('')
+  const [qwenDeviceId, setQwenDeviceId] = useState<string>('')
 
   const handleCheckQwenToken = useCallback(async () => {
     setCheckingQwenToken(true)
@@ -77,8 +78,16 @@ export function SettingsForm({
   const handleUpdateQwenFingerprint = useCallback(async () => {
     setUpdatingQwenFingerprint(true)
     try {
+      // 1. Actively open/focus a chat.qwen.ai tab and read a fresh device
+      //    ID from its localStorage (cache invalidated first).
+      await refreshQwenDeviceId()
+      // 2. Generate fresh cookies using the newly cached device ID; writes
+      //    ssxmod_itna / ssxmod_itna2 to the cookie jar.
       const cookies = await updateQwenCookies()
       setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
+      // 3. Reflect the active device ID in the UI.
+      const id = await getQwenDeviceId()
+      setQwenDeviceId(id)
     } catch (e) {
       console.error(e)
     } finally {
@@ -89,7 +98,10 @@ export function SettingsForm({
   useEffect(() => {
     if (providerMode === 'qwen-chat') {
       handleCheckQwenToken()
-      // Generate initial fingerprint for display
+      // Surface the active device ID (sourced from Qwen's own localStorage
+      // or extension-storage cache) and generate an initial fingerprint
+      // preview for display.
+      getQwenDeviceId().then(setQwenDeviceId).catch(() => {})
       try {
         const cookies = generateCookies()
         setQwenFingerprint(cookies.ssxmod_itna.slice(0, 32) + '...')
@@ -271,11 +283,11 @@ export function SettingsForm({
                 </div>
               </div>
 
-              {/* 2. Fingerprint Generator Row */}
-              <div className="border rounded-md p-2 bg-slate-50 dark:bg-slate-900/40 space-y-1.5 text-xs">
+              {/* 2. Identity Row — device ID + rotating fingerprint */}
+              <div className="border rounded-md p-2 bg-slate-50 dark:bg-slate-900/40 space-y-2 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-[9px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-                    <Fingerprint className="size-3" /> Fingerprint Generator
+                    <Fingerprint className="size-3" /> Device Identity
                   </span>
                   <button
                     onClick={handleUpdateQwenFingerprint}
@@ -286,8 +298,23 @@ export function SettingsForm({
                     Update
                   </button>
                 </div>
-                <div className="font-mono text-[9px] p-1 bg-zinc-100 dark:bg-zinc-800 rounded-sm text-zinc-600 dark:text-zinc-400 truncate">
-                  {qwenFingerprint || 'Not generated yet'}
+                <div className="space-y-1.5">
+                  <div>
+                    <div className="text-[8px] uppercase tracking-wider text-muted-foreground mb-0.5">
+                      Device ID <span className="normal-case">(stable — matches chat.qwen.ai localStorage)</span>
+                    </div>
+                    <div className="font-mono text-[9px] p-1 bg-zinc-100 dark:bg-zinc-800 rounded-sm text-zinc-600 dark:text-zinc-400 truncate">
+                      {qwenDeviceId || 'Loading...'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[8px] uppercase tracking-wider text-muted-foreground mb-0.5 flex items-center gap-1">
+                      <Key className="size-2.5" /> ssxmod_itna <span className="normal-case">(per-request hash)</span>
+                    </div>
+                    <div className="font-mono text-[9px] p-1 bg-zinc-100 dark:bg-zinc-800 rounded-sm text-zinc-600 dark:text-zinc-400 truncate">
+                      {qwenFingerprint || 'Not generated yet'}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
