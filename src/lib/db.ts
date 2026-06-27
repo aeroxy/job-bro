@@ -3,9 +3,10 @@ import { type DBSchema, type IDBPDatabase, openDB } from 'idb'
 import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
+import { extractLinkedInJobId } from '@/extractor/linkedin'
 
 const DB_NAME = 'job-bro'
-const DB_VERSION = 3
+const DB_VERSION = 4
 
 export interface AnalysisRecord {
   id: string
@@ -63,7 +64,7 @@ let dbPromise: Promise<IDBPDatabase<JobBroDB>> | null = null
 function getDB() {
   if (!dbPromise) {
     dbPromise = openDB<JobBroDB>(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion) {
+      async upgrade(db, oldVersion, _newVersion, tx) {
         if (oldVersion < 1) {
           const store = db.createObjectStore('analyses', { keyPath: 'id' })
           store.createIndex('by-created', 'createdAt')
@@ -75,6 +76,43 @@ function getDB() {
         }
         // v3 adds optional status/progress to PersistedSession — no schema change needed
         // since IndexedDB stores arbitrary values; the bump just signals upgraders.
+
+        // v4 backfill: older builds couldn't parse the id from slug-style
+        // /jobs/view/<slug>-<id>/ URLs, so those analyses were stored with
+        // job_id=undefined and never produced a `sessions` row — leaving the
+        // panel unable to rehydrate them. Re-derive the id from job.url, patch
+        // the analyses record (so History group/Restore/Open work), and
+        // synthesize the missing session. Newest report wins per job; an
+        // existing live session is never clobbered.
+        if (oldVersion >= 1 && oldVersion < 4) {
+          const analysesStore = tx.objectStore('analyses')
+          const sessionsStore = tx.objectStore('sessions')
+          const all = await analysesStore.getAll()
+          const existingSessionIds = new Set(await sessionsStore.getAllKeys())
+
+          const repairable = all
+            .filter((r) => !r.job?.job_id)
+            .map((r) => ({ r, jobId: extractLinkedInJobId(r.job?.url ?? '') }))
+            .filter((x): x is { r: AnalysisRecord; jobId: string } => !!x.jobId)
+            .sort((a, b) => b.r.createdAt - a.r.createdAt)
+
+          const used = new Set<string>()
+          for (const { r, jobId } of repairable) {
+            await analysesStore.put({ ...r, job: { ...r.job, job_id: jobId } })
+            if (existingSessionIds.has(jobId) || used.has(jobId)) continue
+            used.add(jobId)
+            await sessionsStore.put({
+              job_id: jobId,
+              job: { ...r.job, job_id: jobId },
+              report: r.report,
+              qnaHistory: [],
+              resumeMarkdown: null,
+              resumeSummary: null,
+              updatedAt: r.createdAt,
+              status: 'done',
+            })
+          }
+        }
       },
     })
   }
