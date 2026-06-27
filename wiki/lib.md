@@ -198,7 +198,9 @@ Thin wrappers over `chrome.storage.local`:
 
 ## `db.ts`
 
-IndexedDB via `idb` library. Database: `job-bro`, version 2.
+IndexedDB via `idb` library. Database: `job-bro`, version 4.
+
+**v4 migration (backfill):** `extractLinkedInJobId` once returned `null` for slug-style `/jobs/view/<slug>-<id>/` URLs, so analyses extracted on those pages were stored with `job_id=undefined` and never got a `sessions` row — the panel couldn't rehydrate them. The v4 upgrade re-derives `job_id` from each affected `analyses` record's `job.url`, patches the record, and synthesizes the missing `sessions` row (newest report per job; never clobbers an existing session).
 
 **Object store:** `sessions`
 - Key: LinkedIn `job_id` (string)

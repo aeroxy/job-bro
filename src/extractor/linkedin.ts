@@ -1,7 +1,14 @@
 import type { ExtractedJob } from '@/types/job'
 
 export function extractLinkedInJobId(url: string): string | null {
-  const m = url.match(/\/jobs\/view\/(\d+)/) ?? url.match(/[?&]currentJobId=(\d+)/)
+  // /jobs/view/ URLs come in two shapes: a bare numeric id
+  // (/jobs/view/4417162348/) and a slug with the id trailing
+  // (/jobs/view/ai-systems-engineer-at-openai-4417162348/). The optional
+  // `[^/?#]*-` prefix skips the slug so the trailing digits are captured in
+  // both cases. Falls back to the currentJobId query param on search/collections.
+  const m =
+    url.match(/\/jobs\/view\/(?:[^/?#]*-)?(\d+)/) ??
+    url.match(/[?&]currentJobId=(\d+)/)
   return m?.[1] ?? null
 }
 
