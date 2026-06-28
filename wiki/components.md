@@ -152,10 +152,10 @@ Form for editing `UserProfile`:
 ### `SettingsForm`
 
 Form for editing `LLMConfig` + custom system prompt:
-- **Backend selector** — two-card radio: "Cloud (HTTP)" vs "Chrome built-in AI". Chrome card is disabled when `useChromeAiStatus.status === 'unavailable'` and shows a hint about the `chrome://flags/#prompt-api-for-gemini-nano` requirement. When the backend is `chrome-prompt` and the model is `'downloadable'`, a Download button triggers `startDownload`; while `'downloading'`, a progress spinner with percent shows.
-- **Cloud-only fields** (only when backend is `'openai'`): base_url, model, api_key (password show/hide), custom_headers (JSON textarea), request_timeout, stream_timeout
-- **Stream Mode** switch — applies to both backends
-- Large textarea: custom system prompt (prepended to all evaluators)
+- **Backend selector** — three-card radio: "Cloud" (`openai`) / "Chrome" (`chrome-prompt`, Gemini Nano) / "Qwen Chat" (`qwen-chat`). Chrome card is disabled when `useChromeAiStatus.status === 'unavailable'` and shows a hint about the `chrome://flags/#prompt-api-for-gemini-nano` requirement. When the backend is `chrome-prompt` and the model is `'downloadable'`, a Download button triggers `startDownload`; while `'downloading'`, a progress spinner with percent shows.
+- **Cloud-only fields** (only when backend is `'openai'`): base_url, model, api_key (password show/hide), custom_headers (JSON textarea), request_timeout, stream_timeout, **concurrency**, max_tokens, temperature; plus Allow Tool Calls / Structured Output / Stream Mode switches.
+- **Qwen-only fields** (only when backend is `'qwen-chat'`): Auth Status (token check), Device Identity (device ID + rotating `ssxmod_itna` fingerprint, Update button), and **Concurrency** — caps how many evaluators hit `chat.qwen.ai` in parallel (`config.concurrency ?? 2`); lowering to 1 mitigates the anti-bot "overloaded" throttle.
+- Large textarea: custom system prompt (prepended to all evaluators; saved per-profile for cloud/Qwen, separate key for Chrome).
 
 ---
 
