@@ -40,7 +40,7 @@ export async function waitForGreenhousePage(timeoutMs = 2000): Promise<boolean> 
     const observer = new MutationObserver(() => {
       if (document.querySelector(READY_SELECTOR)) finish(true)
     })
-    observer.observe(document.body, { childList: true, subtree: true })
+    observer.observe(document.body ?? document.documentElement, { childList: true, subtree: true })
 
     const timer = setTimeout(() => finish(false), timeoutMs)
   })
