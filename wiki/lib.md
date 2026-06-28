@@ -227,6 +227,26 @@ IndexedDB via `idb` library. Database: `job-bro`, version 4.
 
 ---
 
+## `extractor/site.ts`
+
+Site-adapter dispatcher — the single entry point consumers use so the app is
+job-board-agnostic. Picks the right adapter (LinkedIn / Greenhouse) by URL.
+
+| Export | Purpose |
+|---|---|
+| `extractJobId(url)` | URL → stable, **site-namespaced** `job_id`. LinkedIn stays bare-numeric (`4417162348`); Greenhouse is prefixed `gh:` (`gh:4593216008`) so the two never collide in the `sessions` store. Tries LinkedIn then Greenhouse; the per-site matchers are disjoint. Used by hydration (`useTabSessions`), history tab-matching (`useHistory`), and background gating. |
+| `isSupportedJobUrl(url)` | `extractJobId(url) !== null`. |
+| `waitForJobPage(timeoutMs)` | Page-context (content script only). Dispatches to the matching adapter's page-ready poll. |
+| `extractJobFromPage()` | Page-context. Dispatches to the matching adapter's DOM extractor. |
+
+## `extractor/greenhouse.ts`
+
+Greenhouse DOM parser (`job-boards.greenhouse.io` + `boards.greenhouse.io`). Runs inside the content script.
+
+**Key selectors:** `h1.section-header` (title, falls back to `meta[og:title]`), `.job__location` (location), `.job__description` (description via `innerText`). Company is parsed from `document.title` (`"Job Application for <title> at <Company>"`, using the last ` at `), falling back to the capitalized org slug in the URL path.
+
+`extractGreenhouseJobId(url)` returns `gh:<id>` from `.../<org>/jobs/<id>`; `isGreenhouseJobUrl(url)` gates dispatch.
+
 ## `extractor/linkedin.ts`
 
 LinkedIn DOM parser. Runs inside the content script.

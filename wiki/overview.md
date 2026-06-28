@@ -1,10 +1,10 @@
 # Project Overview
 
-**Job Bro** is an AI-powered Chrome extension that analyzes LinkedIn job postings and helps job seekers decide which positions to pursue.
+**Job Bro** is an AI-powered Chrome extension that analyzes job postings (LinkedIn and Greenhouse) and helps job seekers decide which positions to pursue.
 
 ## What It Does
 
-1. **Extracts** job descriptions directly from LinkedIn job posting pages
+1. **Extracts** job descriptions directly from LinkedIn and Greenhouse job posting pages
 2. **Analyzes** them across 5 dimensions using an OpenAI-compatible LLM
 3. **Returns a verdict** — Strong Apply, Maybe, or Skip — with a scored report
 4. **Generates tailored resumes** for a specific job, with iterative feedback

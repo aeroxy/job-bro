@@ -14,7 +14,7 @@ import type { LLMConfig } from '@/types/profile'
 import type { AnalysisProgressMessage, AnalysisCompleteMessage, ResumeCompleteMessage } from '@/types/messages'
 import type { ToolCall } from '@/lib/tools/types'
 import { deleteSession, getSessionByJobId, saveAnalysis, saveSession } from '@/lib/db'
-import { extractLinkedInJobId } from '@/extractor/linkedin'
+import { extractJobId } from '@/extractor/site'
 import { runAnalysis, runResume } from '@/lib/llm-handlers'
 import type { ResumeResult } from '@/lib/llm-handlers'
 
@@ -394,7 +394,7 @@ export function useTabSessions(
 
       const current = sessionsRef.current.get(tabId)
       const midRun = current?.status === 'analyzing' || current?.status === 'extracting'
-      const jobId = tabUrl ? extractLinkedInJobId(tabUrl) : null
+      const jobId = tabUrl ? extractJobId(tabUrl) : null
       const currentJobId = current?.job?.job_id || current?.hydratedJobId
       console.log('[syncTab] jobId', jobId, 'hydratedJobId', current?.hydratedJobId)
 
