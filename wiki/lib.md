@@ -241,7 +241,7 @@ job-board-agnostic. Picks the right adapter (LinkedIn / Greenhouse) by URL.
 
 ## `extractor/greenhouse.ts`
 
-Greenhouse DOM parser (`job-boards.greenhouse.io` + `boards.greenhouse.io`). Runs inside the content script.
+Greenhouse DOM parser (`job-boards.greenhouse.io`; the legacy `boards.greenhouse.io` host 301-redirects there). Runs inside the content script.
 
 **Key selectors:** `h1.section-header` (title, falls back to `meta[og:title]`), `.job__location` (location), `.job__description` (description via `innerText`). Company is parsed from `document.title` (`"Job Application for <title> at <Company>"`, using the last ` at `), falling back to the capitalized org slug in the URL path.
 

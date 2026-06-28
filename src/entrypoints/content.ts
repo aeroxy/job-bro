@@ -2,7 +2,7 @@ import { extractJobFromPage, waitForJobPage } from '@/extractor/site'
 import { injectScript } from 'wxt/utils/inject-script'
 
 export default defineContentScript({
-  matches: ['*://*.linkedin.com/*', '*://*.greenhouse.io/*'],
+  matches: ['*://*.linkedin.com/*', '*://job-boards.greenhouse.io/*'],
   runAt: 'document_end',
   async main() {
     console.log('[Job Bro] Content script loaded on', location.href)

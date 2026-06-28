@@ -1,22 +1,28 @@
 import type { ExtractedJob } from '@/types/job'
 
-// Greenhouse job boards live at job-boards.greenhouse.io/<org>/jobs/<id> and the
-// older boards.greenhouse.io/<org>/jobs/<id>. The id is namespaced with a `gh:`
-// prefix so it never collides with a (also numeric) LinkedIn job_id in the
-// shared `sessions` store.
+// Greenhouse job boards live at job-boards.greenhouse.io/<org>/jobs/<id>. The id
+// is namespaced with a `gh:` prefix so it never collides with a (also numeric)
+// LinkedIn job_id in the shared `sessions` store. (The legacy boards.greenhouse.io
+// host 301-redirects here, so we only need to match job-boards.)
 export function extractGreenhouseJobId(url: string): string | null {
-  const m = url.match(/greenhouse\.io\/[^/?#]+\/jobs\/(\d+)/)
+  // Restricted to the board host so it never disagrees with isGreenhouseJobUrl
+  // (e.g. app.greenhouse.io is not a job board).
+  const m = url.match(/job-boards\.greenhouse\.io\/[^/?#]+\/jobs\/(\d+)/)
   return m ? `gh:${m[1]}` : null
 }
 
 export function isGreenhouseJobUrl(url: string): boolean {
-  return /(?:job-boards|boards)\.greenhouse\.io\/[^/?#]+\/jobs\/\d+/.test(url)
+  // Derived from the id parser so the matcher and extractor never drift apart.
+  return extractGreenhouseJobId(url) !== null
 }
 
-const READY_SELECTOR = '.job__description, h1.section-header'
+// Readiness gates on the description specifically: the title (h1.section-header)
+// can mount before the body, and extracting then would persist an empty
+// description. Requiring .job__description guarantees the content we need exists.
+const READY_SELECTOR = '.job__description'
 
 // Greenhouse boards are server-rendered, but the content can still mount a beat
-// after document_end. Poll for the description/title to appear before extracting.
+// after document_end. Poll for the description to appear before extracting.
 export async function waitForGreenhousePage(timeoutMs = 2000): Promise<boolean> {
   if (!isGreenhouseJobUrl(window.location.href)) return false
   if (document.querySelector(READY_SELECTOR)) return true
@@ -49,8 +55,10 @@ function extractCompany(): string {
     if (company) return company
   }
   // Fallback: the org slug in the URL path (job-boards.greenhouse.io/<org>/jobs/).
+  // Slugs are hyphen/underscore separated, so title-case each word
+  // (e.g. "digital-ocean" → "Digital Ocean").
   const slug = window.location.href.match(/greenhouse\.io\/([^/?#]+)\/jobs\//)?.[1]
-  if (slug) return slug.charAt(0).toUpperCase() + slug.slice(1)
+  if (slug) return slug.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
   return 'Unknown'
 }
 
@@ -67,7 +75,7 @@ export function extractGreenhouseJob(): ExtractedJob {
   const descEl = document.querySelector<HTMLElement>('.job__description')
   const description = descEl?.innerText?.trim() || descEl?.textContent?.trim() || ''
 
-  if (!title && !description) {
+  if (!description) {
     throw new Error('Could not extract job content — page may still be loading')
   }
 

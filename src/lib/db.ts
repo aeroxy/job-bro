@@ -77,13 +77,13 @@ function getDB() {
         // v3 adds optional status/progress to PersistedSession — no schema change needed
         // since IndexedDB stores arbitrary values; the bump just signals upgraders.
 
-        // v4 backfill: older builds couldn't parse the id from slug-style
-        // /jobs/view/<slug>-<id>/ URLs, so those analyses were stored with
-        // job_id=undefined and never produced a `sessions` row — leaving the
-        // panel unable to rehydrate them. Re-derive the id from job.url, patch
-        // the analyses record (so History group/Restore/Open work), and
-        // synthesize the missing session. Newest report wins per job; an
-        // existing live session is never clobbered.
+        // v4 backfill: pre-v2 analyses never produced a `sessions` row (the
+        // store didn't exist yet), and slug-style /jobs/view/<slug>-<id>/ URLs
+        // older builds couldn't parse were stored with job_id=undefined — both
+        // leave the panel unable to rehydrate. Use the record's job_id when it
+        // has one, otherwise re-derive it from job.url (patching the record so
+        // History group/Restore/Open work), then synthesize any missing session.
+        // Newest report wins per job; an existing session is never clobbered.
         if (oldVersion >= 1 && oldVersion < 4) {
           const analysesStore = tx.objectStore('analyses')
           const sessionsStore = tx.objectStore('sessions')
@@ -91,14 +91,16 @@ function getDB() {
           const existingSessionIds = new Set(await sessionsStore.getAllKeys())
 
           const repairable = all
-            .filter((r) => !r.job?.job_id)
-            .map((r) => ({ r, jobId: extractLinkedInJobId(r.job?.url ?? '') }))
+            .map((r) => ({ r, jobId: r.job?.job_id ?? extractLinkedInJobId(r.job?.url ?? '') }))
             .filter((x): x is { r: AnalysisRecord; jobId: string } => !!x.jobId)
             .sort((a, b) => b.r.createdAt - a.r.createdAt)
 
           const used = new Set<string>()
           for (const { r, jobId } of repairable) {
-            await analysesStore.put({ ...r, job: { ...r.job, job_id: jobId } })
+            // Only the slug-bug records need their job_id written back.
+            if (!r.job?.job_id) {
+              await analysesStore.put({ ...r, job: { ...r.job, job_id: jobId } })
+            }
             if (existingSessionIds.has(jobId) || used.has(jobId)) continue
             used.add(jobId)
             await sessionsStore.put({
