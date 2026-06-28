@@ -3,6 +3,43 @@ import { generateDeviceId } from './fingerprint';
 
 const QWEN_ORIGIN = 'https://chat.qwen.ai';
 
+// Alibaba anti-bot ("tmd"/x5sec) punish + overload markers. When the
+// completions endpoint answers with one of these instead of an SSE stream, the
+// request was throttled — e.g.
+//   { "ret": ["FAIL_SYS_USER_VALIDATE", "RGV587_ERROR::SM::哎哟喂,被挤爆啦,请稍后重试"],
+//     "data": { "url": ".../_____tmd_____/punish?x5secdata=...&action=captcha" } }
+// ("哎哟喂,被挤爆啦,请稍后重试" = "we're overloaded, please retry later"). The
+// fix is to wait and resend the SAME chat_id — the rejected request never
+// reached the model, so there's no need to POST /chats/new again.
+const QWEN_RATE_LIMIT_RETRIES = 3;
+const QWEN_RATE_LIMIT_DELAY_MS = 30_000;
+
+function isQwenAntiBotChallenge(raw: string): boolean {
+  if (!raw) return false;
+  return /RGV587_ERROR|FAIL_SYS_USER_VALIDATE|_____tmd_____|x5secdata/.test(raw);
+}
+
+// setTimeout that rejects (rather than resolving) when the caller aborts, so a
+// CANCEL_ANALYSIS during the 30s back-off tears the request down immediately.
+// The rejection message matches what sendQwenChat treats as an abort.
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('The user aborted a request.', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('The user aborted a request.', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort);
+  });
+}
+
 // Format the local timezone offset as `GMT±HHMM` — the exact shape Qwen's
 // `timezone` header expects. `getTimezoneOffset()` returns minutes *behind*
 // UTC (positive west), so negate to get the conventional east-positive sign.
@@ -522,150 +559,215 @@ export async function sendQwenChatStream(
       return;
     }
 
-    // 3. Create active session
+    // 3. Create active session ONCE. On an anti-bot/overload retry we reuse
+    //    this same chat_id — the throttled request never reached the model, so
+    //    the chat is still empty and there's no need to POST /chats/new again.
     const chatId = await createQwenSession(token);
     if (!chatId) {
       wrappedOnError('Failed to initialize a Qwen chat session.');
       return;
     }
 
-    // 4. Build exact Qwen v2.1 Payload aligned with recent Qwen2API commits
-    const nowInSeconds = Math.floor(Date.now() / 1000);
+    // One attempt at the completions stream. Returns a discriminated result so
+    // the retry loop can tell an anti-bot/overload throttle apart from a real
+    // error or a clean finish. Content deltas are forwarded to onChunk as they
+    // arrive; the anti-bot "punish" response carries no deltas, so a retry
+    // never double-emits.
+    type AttemptResult = { kind: 'done' } | { kind: 'rate_limited' } | { kind: 'error'; message: string };
 
-    const payload = {
-      stream: true,
-      version: '2.1',
-      incremental_output: true,
-      chat_id: chatId,
-      chat_mode: 'normal',
-      model: 'qwen3.7-max',
-      parent_id: null,
-      messages: [buildQwenMessagesPayload(messages)],
-      timestamp: nowInSeconds,
-    };
+    const runCompletionAttempt = async (): Promise<AttemptResult> => {
+      // Build exact Qwen v2.1 Payload aligned with recent Qwen2API commits.
+      // Rebuilt per attempt so the timestamp/x-request-id stay current.
+      const nowInSeconds = Math.floor(Date.now() / 1000);
+      const payload = {
+        stream: true,
+        version: '2.1',
+        incremental_output: true,
+        chat_id: chatId,
+        chat_mode: 'normal',
+        model: 'qwen3.7-max',
+        parent_id: null,
+        messages: [buildQwenMessagesPayload(messages)],
+        timestamp: nowInSeconds,
+      };
 
-    // 5. Send same-origin-spoofed completions request from extension background
-    console.log('[Qwen Service] Initiating completions stream fetch...');
-    const response = await fetch(`${QWEN_ORIGIN}/api/v2/chat/completions?chat_id=${chatId}`, {
-      method: 'POST',
-      credentials: 'include', // Ensure cookies are sent
-      signal, // Thread the abort signal through
-      headers: {
-        'accept': 'text/event-stream',
-        'content-type': 'application/json',
-        'source': 'web',
-        'token': token,
-        'bx-v': '2.5.36',
-        'version': '0.2.63',
-        'timezone': formatTimezone(),
-        'x-request-id': crypto.randomUUID(),
-        'x-accel-buffering': 'no',
-      },
-      body: JSON.stringify(payload),
-    });
+      // Send same-origin-spoofed completions request from extension background
+      console.log('[Qwen Service] Initiating completions stream fetch...');
+      const response = await fetch(`${QWEN_ORIGIN}/api/v2/chat/completions?chat_id=${chatId}`, {
+        method: 'POST',
+        credentials: 'include', // Ensure cookies are sent
+        signal, // Thread the abort signal through
+        headers: {
+          'accept': 'text/event-stream',
+          'content-type': 'application/json',
+          'source': 'web',
+          'token': token,
+          'bx-v': '2.5.36',
+          'version': '0.2.63',
+          'timezone': formatTimezone(),
+          'x-request-id': crypto.randomUUID(),
+          'x-accel-buffering': 'no',
+        },
+        body: JSON.stringify(payload),
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      wrappedOnError(`Request failed with status ${response.status}: ${errorText}`);
-      return;
-    }
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        if (isQwenAntiBotChallenge(errorText)) return { kind: 'rate_limited' };
+        return { kind: 'error', message: `Request failed with status ${response.status}: ${errorText}` };
+      }
 
-    if (!response.body) {
-      wrappedOnError('No streaming body received from Qwen.');
-      return;
-    }
+      if (!response.body) {
+        return { kind: 'error', message: 'No streaming body received from Qwen.' };
+      }
 
-    // 6. Decode stream chunks in real-time
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+      // Decode stream chunks in real-time
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let emittedAny = false;
+      let idleTimedOut = false;
+      // First bytes of the body, captured only until real content streams. The
+      // anti-bot punish arrives as a non-SSE JSON body with no `data:` lines, so
+      // it never reaches onChunk — we sniff it from the head instead.
+      let rawHead = '';
+      const RAW_HEAD_CAP = 8192;
 
-    // Idle watchdog — if no data arrives within this window, treat as stall
-    // and tear the stream down (the 10s QWEN_PING keep-alive does not
-    // protect the reader itself).
-    const IDLE_TIMEOUT_MS = 60_000;
-    const resetIdleTimer = () => {
-      clearIdleTimer();
-      idleTimer = setTimeout(() => {
-        reader.cancel().catch(() => {});
-        wrappedOnError('Stream idle timeout: no data received for 60s');
-      }, IDLE_TIMEOUT_MS);
-    };
-    resetIdleTimer();
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+      // Idle watchdog — if no data arrives within this window, treat as stall
+      // and tear the stream down (the 10s QWEN_PING keep-alive does not
+      // protect the reader itself).
+      const IDLE_TIMEOUT_MS = 60_000;
+      const resetIdleTimer = () => {
+        clearIdleTimer();
+        idleTimer = setTimeout(() => {
+          idleTimedOut = true;
+          reader.cancel().catch(() => {});
+        }, IDLE_TIMEOUT_MS);
+      };
       resetIdleTimer();
 
-      if (value) {
-        buffer += decoder.decode(value, { stream: true });
-      }
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        resetIdleTimer();
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-        const dataStr = trimmed.slice(6);
-        if (dataStr === '[DONE]') {
-          clearIdleTimer();
-          reader.cancel().catch(() => {});
-          wrappedOnDone();
-          return;
+        let decoded = '';
+        if (value) {
+          decoded = decoder.decode(value, { stream: true });
+          buffer += decoded;
         }
+        if (!emittedAny && rawHead.length < RAW_HEAD_CAP) rawHead += decoded;
 
-        try {
-          const chunkPayload = JSON.parse(dataStr);
-          if (chunkPayload.error) {
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+          const dataStr = trimmed.slice(6);
+          if (dataStr === '[DONE]') {
             clearIdleTimer();
             reader.cancel().catch(() => {});
-            wrappedOnError(
-              typeof chunkPayload.error.message === 'string'
-                ? chunkPayload.error.message
-                : JSON.stringify(chunkPayload.error)
-            );
-            return;
+            return { kind: 'done' };
           }
-          const delta = chunkPayload.choices?.[0]?.delta;
-          if (delta?.content) {
-            onChunk(delta.content);
+
+          try {
+            const chunkPayload = JSON.parse(dataStr);
+            if (chunkPayload.error) {
+              clearIdleTimer();
+              reader.cancel().catch(() => {});
+              const message =
+                typeof chunkPayload.error.message === 'string'
+                  ? chunkPayload.error.message
+                  : JSON.stringify(chunkPayload.error);
+              return isQwenAntiBotChallenge(message) ? { kind: 'rate_limited' } : { kind: 'error', message };
+            }
+            const delta = chunkPayload.choices?.[0]?.delta;
+            if (delta?.content) {
+              emittedAny = true;
+              onChunk(delta.content);
+            }
+          } catch {
+            // Ignore parsing errors
           }
-        } catch {
-          // Ignore parsing errors
         }
       }
-    }
 
-    clearIdleTimer();
+      clearIdleTimer();
 
-    // Flush decoder + leftover buffer. No-op for well-formed streams that
-    // ended on a `data: [DONE]\n` boundary (which the loop above handled).
-    buffer += decoder.decode();
-    const leftover = buffer.trim();
-    if (leftover && leftover.startsWith('data: ')) {
-      const dataStr = leftover.slice(6);
-      if (dataStr !== '[DONE]') {
-        try {
-          const chunkPayload = JSON.parse(dataStr);
-          if (chunkPayload.error) {
-            wrappedOnError(
-              typeof chunkPayload.error.message === 'string'
-                ? chunkPayload.error.message
-                : JSON.stringify(chunkPayload.error)
-            );
-            return;
+      if (idleTimedOut) {
+        return { kind: 'error', message: 'Stream idle timeout: no data received for 60s' };
+      }
+
+      // Flush decoder + leftover buffer. No-op for well-formed streams that
+      // ended on a `data: [DONE]\n` boundary (which the loop above handled).
+      buffer += decoder.decode();
+      const leftover = buffer.trim();
+      if (!emittedAny && leftover && rawHead.length < RAW_HEAD_CAP) rawHead += leftover;
+      if (leftover && leftover.startsWith('data: ')) {
+        const dataStr = leftover.slice(6);
+        if (dataStr !== '[DONE]') {
+          try {
+            const chunkPayload = JSON.parse(dataStr);
+            if (chunkPayload.error) {
+              const message =
+                typeof chunkPayload.error.message === 'string'
+                  ? chunkPayload.error.message
+                  : JSON.stringify(chunkPayload.error);
+              return isQwenAntiBotChallenge(message) ? { kind: 'rate_limited' } : { kind: 'error', message };
+            }
+            const delta = chunkPayload?.choices?.[0]?.delta;
+            if (delta?.content) {
+              emittedAny = true;
+              onChunk(delta.content);
+            }
+          } catch {
+            // Ignore — truncated final event.
           }
-          const delta = chunkPayload?.choices?.[0]?.delta;
-          if (delta?.content) onChunk(delta.content);
-        } catch {
-          // Ignore — truncated final event.
         }
       }
-    }
 
-    wrappedOnDone();
+      // A 200 response whose body was the anti-bot/overload JSON ("被挤爆啦,
+      // 请稍后重试") yields no content deltas — detect it from the sniffed head.
+      if (!emittedAny && isQwenAntiBotChallenge(rawHead)) return { kind: 'rate_limited' };
+
+      return { kind: 'done' };
+    };
+
+    // Retry the SAME chat_id up to QWEN_RATE_LIMIT_RETRIES times, 30s apart,
+    // when Qwen answers with its anti-bot/overload throttle.
+    for (let attempt = 0; attempt <= QWEN_RATE_LIMIT_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Regenerate fresh ssxmod_itna fingerprint cookies (new timestamp)
+        // before re-sending — the chat_id is reused, only the cookies refresh.
+        await updateQwenCookies();
+      }
+
+      const result = await runCompletionAttempt();
+
+      if (result.kind === 'done') {
+        wrappedOnDone();
+        return;
+      }
+
+      if (result.kind === 'rate_limited' && attempt < QWEN_RATE_LIMIT_RETRIES) {
+        console.warn(
+          `[Qwen Service] Anti-bot/overload response — retrying in ${
+            QWEN_RATE_LIMIT_DELAY_MS / 1000
+          }s (attempt ${attempt + 1}/${QWEN_RATE_LIMIT_RETRIES})`
+        );
+        await abortableDelay(QWEN_RATE_LIMIT_DELAY_MS, signal);
+        continue;
+      }
+
+      wrappedOnError(
+        result.kind === 'rate_limited'
+          ? 'Qwen is overloaded or rate-limiting requests (anti-bot challenge). Please try again later.'
+          : result.message
+      );
+      return;
+    }
   } catch (e) {
     clearIdleTimer();
     console.error('[Qwen Service] Exception in streaming execution:', e);
