@@ -12,23 +12,28 @@ export function extractLinkedInJobId(url: string): string | null {
   return m?.[1] ?? null
 }
 
-function isJobPostingPage(lazyCol?: Element | null): boolean {
+// /jobs/view/ renders the job in [data-testid="lazy-column"]; the search and
+// collections panes render it in .job-details-jobs-unified-top-card__*. Either
+// selector signals the job content has mounted.
+const JOB_CONTENT_SELECTOR =
+  '[data-testid="lazy-column"], .job-details-jobs-unified-top-card__job-title'
+
+function isJobPostingPage(): boolean {
   const url = window.location.href
   const isJobUrl = /linkedin\.com\/jobs\/(view|collections|search)\//.test(url)
-  const hasJobContent = lazyCol !== undefined ? !!lazyCol : !!document.querySelector('[data-testid="lazy-column"]')
-  return isJobUrl && hasJobContent
+  return isJobUrl && !!document.querySelector(JOB_CONTENT_SELECTOR)
 }
 
-// Async variant: polls for the lazy-column container to render. LinkedIn renders
-// the job detail column lazily after route transitions, so a single synchronous
-// check fails for a few hundred ms after navigation. Used by the content script
-// when responding to EXTRACT_JD.
+// Async variant: polls for the job content container to render. LinkedIn renders
+// the job detail lazily after route transitions, so a single synchronous check
+// fails for a few hundred ms after navigation. Used by the content script when
+// responding to EXTRACT_JD.
 export async function waitForJobPostingPage(timeoutMs = 2000): Promise<boolean> {
   const url = window.location.href
   const isJobUrl = /linkedin\.com\/jobs\/(view|collections|search)\//.test(url)
   if (!isJobUrl) return false
 
-  if (document.querySelector('[data-testid="lazy-column"]')) return true
+  if (document.querySelector(JOB_CONTENT_SELECTOR)) return true
 
   return new Promise((resolve) => {
     let settled = false
@@ -41,7 +46,7 @@ export async function waitForJobPostingPage(timeoutMs = 2000): Promise<boolean> 
     }
 
     const observer = new MutationObserver(() => {
-      if (document.querySelector('[data-testid="lazy-column"]')) finish(true)
+      if (document.querySelector(JOB_CONTENT_SELECTOR)) finish(true)
     })
     observer.observe(document.body, { childList: true, subtree: true })
 
@@ -65,13 +70,31 @@ function extractFromLazyColumn(lazyCol: Element): { title: string; company: stri
   return { title, company, location }
 }
 
+function extractFromUnifiedTopCard(): { title: string; company: string; location: string } {
+  // Search / collections detail pane (no lazy-column): a unified "top card".
+  const title =
+    document.querySelector('.job-details-jobs-unified-top-card__job-title')?.textContent?.trim() ?? ''
+  const company =
+    document.querySelector('.job-details-jobs-unified-top-card__company-name')?.textContent?.trim() ?? ''
+  const primary =
+    document.querySelector('.job-details-jobs-unified-top-card__primary-description-container')?.textContent?.trim() ?? ''
+  const location = primary.split('·')[0].trim()
+
+  return { title, company, location }
+}
+
 function extractDescription(): string {
+  // Search / collections panes render the full body in #job-details.
+  const details =
+    document.querySelector('#job-details, .jobs-description__content')?.textContent?.trim() ?? ''
+  if (details.length > 100) return details
+
+  // /jobs/view/ uses a different structure — walk from the "About the job"
+  // heading to the first substantial sibling.
   const aboutH2 = [...document.querySelectorAll('h2')]
     .find((h) => h.textContent?.trim() === 'About the job')
+  if (!aboutH2) return details
 
-  if (!aboutH2) return ''
-
-  // Walk up until we find a sibling element that contains the description
   let container: Element | null = aboutH2.parentElement
   while (container) {
     const sibling = container.nextElementSibling
@@ -81,16 +104,18 @@ function extractDescription(): string {
     container = container.parentElement
   }
 
-  return ''
+  return details
 }
 
 export function extractJob(): ExtractedJob {
-  const lazyCol = document.querySelector('[data-testid="lazy-column"]')
-  if (!isJobPostingPage(lazyCol) || !lazyCol) {
+  if (!isJobPostingPage()) {
     throw new Error('Not a LinkedIn job posting page')
   }
 
-  const { title, company, location } = extractFromLazyColumn(lazyCol)
+  const lazyCol = document.querySelector('[data-testid="lazy-column"]')
+  const { title, company, location } = lazyCol
+    ? extractFromLazyColumn(lazyCol)
+    : extractFromUnifiedTopCard()
   const description = extractDescription()
 
   if (!title && !description) {

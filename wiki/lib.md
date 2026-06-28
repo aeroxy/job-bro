@@ -251,15 +251,13 @@ Greenhouse DOM parser (`job-boards.greenhouse.io`; the legacy `boards.greenhouse
 
 LinkedIn DOM parser. Runs inside the content script.
 
-**Key selectors:**
-- Container: `[data-testid="lazy-column"]` (LinkedIn 2025 DOM)
-- Falls back to `document.title` if title parsing fails
+**Two layouts** (LinkedIn serves the job detail differently by route):
+- `/jobs/view/<id>` → `[data-testid="lazy-column"]`; company/title/location are the first three `<p>` tags (`extractFromLazyColumn`).
+- `/jobs/search/` & `/jobs/collections/` panes (`?currentJobId=<id>`) → `.job-details-jobs-unified-top-card__*` for title/company/primary-description (`extractFromUnifiedTopCard`).
 
-**Parsing helpers:**
-- `extractSalary()` — regex-based salary pattern matching
-- `extractEmploymentType()` — matches against known employment type strings
-- `extractExperienceLevel()` — matches against known level strings
-- `parseListsFromDescription()` — splits job description into requirements/benefits by section headers (case-insensitive keyword matching)
+`JOB_CONTENT_SELECTOR` (either container) gates `isJobPostingPage` / `waitForJobPostingPage`; `extractJob` branches on whichever container is present, with `document.title` fallbacks for title/company.
+
+**Description (`extractDescription`):** prefers `#job-details` / `.jobs-description__content` (the search/collections panes render the full body there), falling back to walking from the "About the job" `h2` to its first substantial sibling (the `/jobs/view/` structure).
 
 ---
 
