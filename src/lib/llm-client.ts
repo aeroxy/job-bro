@@ -123,20 +123,32 @@ export async function chatCompletion(
   // context and bridge the request to the background service worker.
   if (config.backend === 'qwen-chat') {
     const qwenMessages = messages.map(({ role, content }) => ({ role, content }));
-    if (typeof chrome !== 'undefined' && !chrome.cookies) {
-      const resp = await chrome.runtime.sendMessage({
-        type: 'QWEN_CHAT_REQUEST',
-        messages: qwenMessages,
-      });
-      if (!resp?.ok) {
-        if (resp?.isAbort) {
-          throw new DOMException('The user aborted a request.', 'AbortError');
+    // Concurrency control. Qwen's anti-bot WAF throttles bursts — all 6
+    // evaluators firing at once trips the "被挤爆啦" overload/punish response.
+    // Gate through the same per-provider queue the cloud path uses, keyed by a
+    // constant since Qwen has no base_url. Default 2, user-configurable via
+    // config.concurrency. The queue lives in this realm (the offscreen, for the
+    // analysis path), so it caps the bridged requests across all evaluators
+    // before they fan out to the background. A request that's mid-back-off
+    // (anti-bot retry, 30s apart) keeps holding its slot, which is the desired
+    // backpressure — it stops the other evaluators from piling on.
+    const concurrency = config.concurrency ?? 2;
+    return getQueue('qwen-chat').run(concurrency, async () => {
+      if (typeof chrome !== 'undefined' && !chrome.cookies) {
+        const resp = await chrome.runtime.sendMessage({
+          type: 'QWEN_CHAT_REQUEST',
+          messages: qwenMessages,
+        });
+        if (!resp?.ok) {
+          if (resp?.isAbort) {
+            throw new DOMException('The user aborted a request.', 'AbortError');
+          }
+          throw new Error(resp?.error || 'Failed to delegate Qwen Chat request to background.');
         }
-        throw new Error(resp?.error || 'Failed to delegate Qwen Chat request to background.');
+        return resp.result;
       }
-      return resp.result;
-    }
-    return sendQwenChat(qwenMessages, options?.signal);
+      return sendQwenChat(qwenMessages, options?.signal);
+    });
   }
 
   const queue = getQueue(config.base_url)

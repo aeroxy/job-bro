@@ -328,6 +328,29 @@ export function SettingsForm({
                   </div>
                 </div>
               </div>
+
+              {/* 3. Concurrency — Qwen's anti-bot WAF throttles bursts, so cap
+                  how many evaluators hit chat.qwen.ai in parallel. */}
+              <div className="border rounded-md p-2 bg-slate-50 dark:bg-slate-900/40 space-y-1.5 text-xs">
+                <Label className="text-xs">Concurrency</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10}
+                  placeholder="2"
+                  value={config.concurrency ?? ''}
+                  onChange={(e) =>
+                    setConfig((p) => ({
+                      ...p,
+                      concurrency: e.target.value ? (Number(e.target.value) || undefined) : undefined,
+                    }))
+                  }
+                  className="text-xs"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Max parallel requests to Qwen. Lower to 1 if you keep hitting &ldquo;overloaded&rdquo; / anti-bot errors.
+                </p>
+              </div>
             </div>
           )}
         </div>

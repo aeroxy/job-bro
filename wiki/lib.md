@@ -30,6 +30,8 @@ Options:
 
 **Custom headers:** `config.custom_headers` is parsed as JSON and merged into request headers.
 
+**Concurrency:** both Cloud and Qwen go through the per-provider `RequestQueue` (`getQueue(key).run(concurrency, fn)`), `config.concurrency ?? 2`. Cloud keys by `base_url`; Qwen keys by the constant `'qwen-chat'` (it has no `base_url`). The queue lives in the calling realm — for the analysis path that's the **offscreen**, so it caps how many of the 6 evaluators hit `chat.qwen.ai` in parallel before they fan out to the background via `QWEN_CHAT_REQUEST`. This is the primary defense against Qwen's anti-bot burst throttle; a request mid-back-off (see anti-bot retry below) keeps holding its slot, applying backpressure. Chrome (`chrome-prompt`) is serialized separately by the offscreen's own FIFO and skips this queue.
+
 ### `chatCompletionWithTools(config, messages, tools, options)`
 
 Non-streaming tool-call variant for the **Cloud** backend. Same HTTP plumbing, but `tools` is forwarded as `body.tools` and the response may include `tool_calls`. Returns a `ChatCompletionWithToolsResult` (`{ content, tool_calls, raw }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` and `name` for tool results).
