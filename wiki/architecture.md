@@ -19,7 +19,7 @@ job-bro/
 │   ├── evaluators/              # AI evaluation logic
 │   ├── hooks/                   # React hooks
 │   ├── lib/                     # Utility libraries
-│   ├── extractor/               # LinkedIn DOM extraction
+│   ├── extractor/               # Per-site DOM extraction (site.ts dispatcher → linkedin.ts, greenhouse.ts)
 │   ├── types/                   # TypeScript type definitions
 │   └── assets/                  # Tailwind CSS
 ├── public/assets/               # Extension icons
@@ -33,9 +33,9 @@ job-bro/
 The service worker is the **single LLM orchestrator**. Both backends route through it; the offscreen document hosts the bits that need a window context.
 
 ```
-User → LinkedIn Job Page
+User → Job Page (LinkedIn / Greenhouse)
          │
-         ▼ (content script — DOM parsing)
+         ▼ (content script — site-adapter DOM parsing)
     ExtractedJob
          │
          ▼ (chrome.runtime.sendMessage REQUEST_EXTRACTION)
@@ -138,7 +138,9 @@ Sessions are hydrated automatically when the active tab matches a LinkedIn `/job
 
 ## Content Script Injection
 
-The content script (`content.ts`) is declared in `wxt.config.ts` to match `*://www.linkedin.com/jobs/*`. If it hasn't loaded when the user clicks extract, the background worker injects it programmatically via `chrome.scripting.executeScript`.
+The content script (`content.ts`) declares its `matches` (`*://*.linkedin.com/*`, `*://*.greenhouse.io/*`). On `EXTRACT_JD` it dispatches through `extractor/site.ts` to the adapter matching the current URL (LinkedIn or Greenhouse). If it hasn't loaded when the user clicks extract, the background worker injects it programmatically via `chrome.scripting.executeScript`. The SPA tracker (`spa-tracker.js`) is injected only on LinkedIn (history.pushState routing); Greenhouse is multi-page, so `chrome.tabs.onUpdated` already catches navigations.
+
+**Supported sites:** new adapters slot into `extractor/site.ts` (a `*JobId` URL parser + `isXJobUrl` + page-context `extractXJob` / `waitForXPage`). `job_id`s are site-namespaced to avoid collisions — LinkedIn bare-numeric, Greenhouse `gh:<id>`.
 
 ## LLM Execution Context
 

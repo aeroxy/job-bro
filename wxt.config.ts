@@ -29,7 +29,7 @@ export default defineConfig({
   }),
   manifest: {
     name: 'Job Bro',
-    description: 'AI-powered LinkedIn job posting analyzer',
+    description: 'AI-powered job posting analyzer for LinkedIn and Greenhouse',
     permissions: ['sidePanel', 'storage', 'activeTab', 'tabs', 'scripting', 'offscreen', 'cookies', 'declarativeNetRequest'],
     host_permissions: [
       '*://*/*',

@@ -12,7 +12,7 @@ import {
   saveSession,
   STALE_IN_FLIGHT_MS,
 } from '@/lib/db'
-import { extractLinkedInJobId } from '@/extractor/linkedin'
+import { extractJobId } from '@/extractor/site'
 
 export interface GroupedRecord {
   jobId: string
@@ -25,7 +25,7 @@ export interface GroupedRecord {
 async function openOrFocusTab(url: string, jobId?: string): Promise<void> {
   if (jobId) {
     const tabs = await chrome.tabs.query({})
-    const existing = tabs.find((t) => t.url && extractLinkedInJobId(t.url) === jobId)
+    const existing = tabs.find((t) => t.url && extractJobId(t.url) === jobId)
     if (existing?.id) {
       await chrome.tabs.update(existing.id, { active: true })
       if (existing.windowId) chrome.windows.update(existing.windowId, { focused: true })

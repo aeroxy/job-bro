@@ -3,6 +3,7 @@ import { sendQwenChat } from '@/lib/qwen/qwen-service'
 import type { ChatResponse, ExtractionResponse, Message } from '@/types/messages'
 import type { AggregatedReport, EvaluatorStatus } from '@/types/evaluation'
 import { getSessionByJobId, saveSession, type PersistedEvaluatorProgress } from '@/lib/db'
+import { isSupportedJobUrl } from '@/extractor/site'
 
 // Runs on every service-worker startup — confirms which build is live so a
 // stale (un-reloaded) worker is immediately obvious in the console.
@@ -358,10 +359,10 @@ async function handleRequestExtraction(tabId: number): Promise<ExtractionRespons
     return { type: 'JD_EXTRACTION_FAILED', error: 'Tab not found' }
   }
 
-  if (!tab.url?.includes('linkedin.com/jobs')) {
+  if (!tab.url || !isSupportedJobUrl(tab.url)) {
     return {
       type: 'JD_EXTRACTION_FAILED',
-      error: 'Not on a LinkedIn jobs page. Navigate to a job posting first.',
+      error: 'Not on a supported job posting. Open a LinkedIn or Greenhouse job first.',
     }
   }
 
@@ -389,7 +390,7 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
   } catch (e) {
     return {
       type: 'JD_EXTRACTION_FAILED',
-      error: `Could not inject content script: ${(e as Error).message}. Try refreshing the LinkedIn tab.`,
+      error: `Could not inject content script: ${(e as Error).message}. Try refreshing the job tab.`,
     }
   }
 
@@ -398,7 +399,7 @@ async function sendExtractMessage(tabId: number): Promise<ExtractionResponse> {
       if (chrome.runtime.lastError) {
         resolve({
           type: 'JD_EXTRACTION_FAILED',
-          error: 'Still could not connect after injecting. Please refresh the LinkedIn tab.',
+          error: 'Still could not connect after injecting. Please refresh the job tab.',
         })
       } else {
         resolve(res as ExtractionResponse)

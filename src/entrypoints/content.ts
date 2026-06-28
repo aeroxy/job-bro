@@ -1,8 +1,8 @@
-import { extractJob, waitForJobPostingPage } from '@/extractor/linkedin'
+import { extractJobFromPage, waitForJobPage } from '@/extractor/site'
 import { injectScript } from 'wxt/utils/inject-script'
 
 export default defineContentScript({
-  matches: ['*://*.linkedin.com/*'],
+  matches: ['*://*.linkedin.com/*', '*://*.greenhouse.io/*'],
   runAt: 'document_end',
   async main() {
     console.log('[Job Bro] Content script loaded on', location.href)
@@ -29,15 +29,15 @@ export default defineContentScript({
       if (message.type !== 'EXTRACT_JD') return false
       ;(async () => {
         try {
-          const ready = await waitForJobPostingPage(2000)
+          const ready = await waitForJobPage(2000)
           if (!ready) {
             sendResponse({
               type: 'JD_EXTRACTION_FAILED',
-              error: 'Not a LinkedIn job posting page',
+              error: 'Not a supported job posting page',
             })
             return
           }
-          const job = extractJob()
+          const job = extractJobFromPage()
           sendResponse({ type: 'JD_EXTRACTED', payload: job })
         } catch (e) {
           sendResponse({
@@ -49,11 +49,17 @@ export default defineContentScript({
       return true
     })
 
-    try {
-      await injectScript('/spa-tracker.js', { keepInDom: true })
-      window.addEventListener('job-bro-url-change', broadcastIfChanged)
-    } catch (e) {
-      console.warn('[Job Bro] Failed to inject SPA tracker:', e)
+    // The SPA tracker is only needed on LinkedIn (history.pushState routing that
+    // chrome.tabs.onUpdated can miss). Greenhouse boards are multi-page — each
+    // job is a full navigation onUpdated already catches — and spa-tracker.js is
+    // a web-accessible resource scoped to linkedin.com, so skip it elsewhere.
+    if (location.hostname.endsWith('linkedin.com')) {
+      try {
+        await injectScript('/spa-tracker.js', { keepInDom: true })
+        window.addEventListener('job-bro-url-change', broadcastIfChanged)
+      } catch (e) {
+        console.warn('[Job Bro] Failed to inject SPA tracker:', e)
+      }
     }
   },
 })
