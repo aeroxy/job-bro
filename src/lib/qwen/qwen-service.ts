@@ -683,7 +683,7 @@ export async function sendQwenChatStream(
                 typeof chunkPayload.error.message === 'string'
                   ? chunkPayload.error.message
                   : JSON.stringify(chunkPayload.error);
-              return isQwenAntiBotChallenge(message) ? { kind: 'rate_limited' } : { kind: 'error', message };
+              return (isQwenAntiBotChallenge(message) && !emittedAny) ? { kind: 'rate_limited' } : { kind: 'error', message };
             }
             const delta = chunkPayload.choices?.[0]?.delta;
             if (delta?.content) {
@@ -717,7 +717,7 @@ export async function sendQwenChatStream(
                 typeof chunkPayload.error.message === 'string'
                   ? chunkPayload.error.message
                   : JSON.stringify(chunkPayload.error);
-              return isQwenAntiBotChallenge(message) ? { kind: 'rate_limited' } : { kind: 'error', message };
+              return (isQwenAntiBotChallenge(message) && !emittedAny) ? { kind: 'rate_limited' } : { kind: 'error', message };
             }
             const delta = chunkPayload?.choices?.[0]?.delta;
             if (delta?.content) {

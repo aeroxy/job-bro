@@ -14,6 +14,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { useChromeAiStatus } from '@/hooks/useChromeAiStatus'
 import type { LLMBackend, LLMConfig, LLMProfile } from '@/types/profile'
 
+function clampConcurrency(val: string): number | undefined {
+  if (!val) return undefined
+  const num = Math.round(Number(val))
+  if (isNaN(num)) return undefined
+  return Math.max(1, Math.min(10, num))
+}
+
 interface SettingsFormProps {
   llmConfig: LLMConfig
   llmProfiles: LLMProfile[]
@@ -342,7 +349,7 @@ export function SettingsForm({
                   onChange={(e) =>
                     setConfig((p) => ({
                       ...p,
-                      concurrency: e.target.value ? (Number(e.target.value) || undefined) : undefined,
+                      concurrency: clampConcurrency(e.target.value),
                     }))
                   }
                   className="text-xs"
@@ -513,7 +520,7 @@ export function SettingsForm({
                     onChange={(e) =>
                       setConfig((p) => ({
                         ...p,
-                        concurrency: e.target.value ? (Number(e.target.value) || undefined) : undefined,
+                        concurrency: clampConcurrency(e.target.value),
                       }))
                     }
                     className="text-xs"
