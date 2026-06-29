@@ -58,6 +58,8 @@ function deriveFinalProgress(report: AggregatedReport): PersistedEvaluatorProgre
 
 let offscreenReady: Promise<void> | null = null
 
+const qwenInFlightRequests = new Map<string, AbortController>()
+
 // Ensure the offscreen document exists. Idempotent — reuses the existing
 // document if one is already alive. The offscreen document runs the full
 // analysis/resume orchestration (no service worker lifetime limits), the
@@ -232,9 +234,33 @@ export default defineBackground(() => {
 
     if (message && (message as { type?: string }).type === 'QWEN_CHAT_REQUEST') {
       const msgs = (message as any).messages;
-      sendQwenChat(msgs)
-        .then((result) => sendResponse({ ok: true, result }))
-        .catch((e) => sendResponse({ ok: false, error: e.message, isAbort: (e as Error).name === 'AbortError' }));
+      const requestId = (message as any).requestId;
+      const controller = new AbortController();
+      if (requestId) {
+        qwenInFlightRequests.set(requestId, controller);
+      }
+      sendQwenChat(msgs, controller.signal)
+        .then((result) => {
+          if (requestId) qwenInFlightRequests.delete(requestId);
+          sendResponse({ ok: true, result });
+        })
+        .catch((e) => {
+          if (requestId) qwenInFlightRequests.delete(requestId);
+          sendResponse({ ok: false, error: e.message, isAbort: (e as Error).name === 'AbortError' });
+        });
+      return true;
+    }
+
+    if (message && (message as { type?: string }).type === 'QWEN_CHAT_CANCEL') {
+      const requestId = (message as any).requestId;
+      if (requestId) {
+        const controller = qwenInFlightRequests.get(requestId);
+        if (controller) {
+          controller.abort();
+          qwenInFlightRequests.delete(requestId);
+        }
+      }
+      sendResponse({ ok: true });
       return true;
     }
 
