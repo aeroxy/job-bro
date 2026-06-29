@@ -30,6 +30,7 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
     }
     const onAbort = () => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       reject(new DOMException('The user aborted a request.', 'AbortError'));
     };
     const timer = setTimeout(() => {
@@ -464,6 +465,7 @@ export async function sendQwenChat(messages: QwenMessage[], signal?: AbortSignal
   return new Promise((resolve, reject) => {
     let fullContent = '';
     const onAbort = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
       reject(new DOMException('The user aborted a request.', 'AbortError'));
     };
     if (signal) signal.addEventListener('abort', onAbort);
