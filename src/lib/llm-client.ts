@@ -53,6 +53,9 @@ class RequestQueue {
         this.waiting.push(waiter)
 
         const onAbort = () => {
+          if (signal) {
+            signal.removeEventListener('abort', onAbort)
+          }
           const idx = this.waiting.indexOf(waiter)
           if (idx !== -1) {
             this.waiting.splice(idx, 1)
