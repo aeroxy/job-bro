@@ -188,6 +188,7 @@ export async function chatCompletion(
           return resp.result;
         }
 
+        const signal = options.signal;
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
           onAbort = () => {
@@ -197,7 +198,7 @@ export async function chatCompletion(
             }).catch(() => {});
             reject(new DOMException('The user aborted a request.', 'AbortError'));
           };
-          options.signal!.addEventListener('abort', onAbort);
+          signal.addEventListener('abort', onAbort);
         });
 
         try {
@@ -211,7 +212,7 @@ export async function chatCompletion(
           return resp.result;
         } finally {
           if (onAbort) {
-            options.signal.removeEventListener('abort', onAbort);
+            signal.removeEventListener('abort', onAbort);
           }
         }
       }
