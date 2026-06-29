@@ -180,6 +180,14 @@ export async function chatCompletion(
           messages: qwenMessages,
         });
 
+        if (!options?.signal) {
+          const resp = await sendPromise;
+          if (!resp?.ok) {
+            throw new Error(resp?.error || 'Failed to delegate Qwen Chat request to background.');
+          }
+          return resp.result;
+        }
+
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
           onAbort = () => {
@@ -189,9 +197,7 @@ export async function chatCompletion(
             }).catch(() => {});
             reject(new DOMException('The user aborted a request.', 'AbortError'));
           };
-          if (options?.signal) {
-            options.signal.addEventListener('abort', onAbort);
-          }
+          options.signal!.addEventListener('abort', onAbort);
         });
 
         try {
@@ -204,7 +210,7 @@ export async function chatCompletion(
           }
           return resp.result;
         } finally {
-          if (options?.signal && onAbort) {
+          if (onAbort) {
             options.signal.removeEventListener('abort', onAbort);
           }
         }
