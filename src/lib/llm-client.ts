@@ -173,20 +173,41 @@ export async function chatCompletion(
         throw new DOMException('The user aborted a request.', 'AbortError');
       }
       if (typeof chrome !== 'undefined' && !chrome.cookies) {
-        const resp = await chrome.runtime.sendMessage({
+        const requestId = crypto.randomUUID();
+        const sendPromise = chrome.runtime.sendMessage({
           type: 'QWEN_CHAT_REQUEST',
+          requestId,
           messages: qwenMessages,
         });
-        if (options?.signal?.aborted) {
-          throw new DOMException('The user aborted a request.', 'AbortError');
-        }
-        if (!resp?.ok) {
-          if (resp?.isAbort) {
-            throw new DOMException('The user aborted a request.', 'AbortError');
+
+        let onAbort: (() => void) | undefined;
+        const abortPromise = new Promise<never>((_, reject) => {
+          onAbort = () => {
+            chrome.runtime.sendMessage({
+              type: 'QWEN_CHAT_CANCEL',
+              requestId,
+            }).catch(() => {});
+            reject(new DOMException('The user aborted a request.', 'AbortError'));
+          };
+          if (options?.signal) {
+            options.signal.addEventListener('abort', onAbort);
           }
-          throw new Error(resp?.error || 'Failed to delegate Qwen Chat request to background.');
+        });
+
+        try {
+          const resp = await Promise.race([sendPromise, abortPromise]);
+          if (!resp?.ok) {
+            if (resp?.isAbort) {
+              throw new DOMException('The user aborted a request.', 'AbortError');
+            }
+            throw new Error(resp?.error || 'Failed to delegate Qwen Chat request to background.');
+          }
+          return resp.result;
+        } finally {
+          if (options?.signal && onAbort) {
+            options.signal.removeEventListener('abort', onAbort);
+          }
         }
-        return resp.result;
       }
       if (options?.signal?.aborted) {
         throw new DOMException('The user aborted a request.', 'AbortError');

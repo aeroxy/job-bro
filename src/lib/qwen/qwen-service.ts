@@ -16,7 +16,7 @@ const QWEN_RATE_LIMIT_DELAY_MS = 30_000;
 
 function isQwenAntiBotChallenge(raw: string): boolean {
   if (!raw) return false;
-  return /RGV587_ERROR|FAIL_SYS_USER_VALIDATE|_____tmd_____|x5secdata/.test(raw);
+  return /RGV587_ERROR|FAIL_SYS_USER_VALIDATE|_____tmd_____|x5secdata|被挤爆啦,请稍后重试/.test(raw);
 }
 
 // setTimeout that rejects (rather than resolving) when the caller aborts, so a
