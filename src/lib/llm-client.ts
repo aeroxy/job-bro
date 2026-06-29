@@ -37,16 +37,48 @@ function truncatedMessage(maxTokens: number): string {
 // Keyed by base_url to ensure limits apply across multiple evaluator runs.
 class RequestQueue {
   private active = 0
-  private waiting: { limit: number; resolve: () => void }[] = []
+  private waiting: { limit: number; resolve: () => void; reject: (err: unknown) => void }[] = []
 
-  async run<T>(concurrency: number, fn: () => Promise<T>): Promise<T> {
-    const limit = Math.max(1, Number.isFinite(concurrency) ? concurrency : 2)
+  async run<T>(concurrency: number, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const rawLimit = Number.isFinite(concurrency) ? concurrency : 2
+    const limit = Math.max(1, Math.min(10, Math.round(rawLimit)))
+
+    if (signal?.aborted) {
+      throw new DOMException('The user aborted a request.', 'AbortError')
+    }
+
     if (this.active >= limit) {
-      await new Promise<void>((resolve) => {
-        this.waiting.push({ limit, resolve })
+      await new Promise<void>((resolve, reject) => {
+        const waiter = { limit, resolve, reject }
+        this.waiting.push(waiter)
+
+        const onAbort = () => {
+          const idx = this.waiting.indexOf(waiter)
+          if (idx !== -1) {
+            this.waiting.splice(idx, 1)
+          }
+          reject(new DOMException('The user aborted a request.', 'AbortError'))
+        }
+
+        if (signal) {
+          signal.addEventListener('abort', onAbort)
+        }
+
+        waiter.resolve = () => {
+          if (signal) {
+            signal.removeEventListener('abort', onAbort)
+          }
+          resolve()
+        }
       })
     } else {
       this.active++
+    }
+
+    if (signal?.aborted) {
+      this.active--
+      this.processQueue()
+      throw new DOMException('The user aborted a request.', 'AbortError')
     }
 
     try {
@@ -134,11 +166,17 @@ export async function chatCompletion(
     // backpressure — it stops the other evaluators from piling on.
     const concurrency = config.concurrency ?? 2;
     return getQueue('qwen-chat').run(concurrency, async () => {
+      if (options?.signal?.aborted) {
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }
       if (typeof chrome !== 'undefined' && !chrome.cookies) {
         const resp = await chrome.runtime.sendMessage({
           type: 'QWEN_CHAT_REQUEST',
           messages: qwenMessages,
         });
+        if (options?.signal?.aborted) {
+          throw new DOMException('The user aborted a request.', 'AbortError');
+        }
         if (!resp?.ok) {
           if (resp?.isAbort) {
             throw new DOMException('The user aborted a request.', 'AbortError');
@@ -147,8 +185,11 @@ export async function chatCompletion(
         }
         return resp.result;
       }
+      if (options?.signal?.aborted) {
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }
       return sendQwenChat(qwenMessages, options?.signal);
-    });
+    }, options?.signal);
   }
 
   const queue = getQueue(config.base_url)
@@ -246,7 +287,7 @@ export async function chatCompletion(
     }
 
     throw lastError ?? new Error('LLM request failed')
-  })
+  }, options?.signal)
 }
 
 export function parseJSON<T>(raw: string): T {
@@ -507,7 +548,7 @@ export async function chatCompletionWithTools(
 
   const queue = getQueue(config.base_url)
   const concurrency = config.concurrency ?? 2
-  return queue.run(concurrency, () => toolCompletionRequest(config, messages, options))
+  return queue.run(concurrency, () => toolCompletionRequest(config, messages, options), options.signal)
 }
 
 // JSON Schema spec passed to providers that support OpenAI's strict
