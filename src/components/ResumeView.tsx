@@ -1,5 +1,5 @@
 import { ArrowLeft, Check, Copy, Download, FileText, Printer, RefreshCw, Sparkles } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { marked } from 'marked'
 
@@ -31,6 +31,9 @@ export function ResumeView({
   onBack,
 }: ResumeViewProps) {
   const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
 
   const html = useMemo(() => {
     if (!markdown) return ''
@@ -44,7 +47,8 @@ export function ResumeView({
     try {
       await navigator.clipboard.writeText(markdown)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => setCopied(false), 2000)
     } catch (err) {
       console.error('Failed to copy text: ', err)
     }
