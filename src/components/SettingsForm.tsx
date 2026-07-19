@@ -2,7 +2,7 @@ import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, Ale
 import { useState, useEffect, useCallback, ReactNode } from 'react'
 
 import { QwenIcon } from '@/components/icons/QwenIcon'
-import { getQwenToken, getCachedQwenDeviceId, getQwenDeviceId, updateQwenCookies, refreshQwenDeviceId, QWEN_MODELS } from '@/lib/qwen/qwen-service'
+import { getQwenToken, getCachedQwenDeviceId, getQwenDeviceId, updateQwenCookies, refreshQwenDeviceId, QWEN_MODELS, normalizeQwenModel } from '@/lib/qwen/qwen-service'
 import { generateCookies } from '@/lib/qwen/cookie-generator'
 
 import { Button } from '@/components/ui/button'
@@ -340,9 +340,9 @@ export function SettingsForm({
               <div className="border rounded-md p-2 bg-slate-50 dark:bg-slate-900/40 space-y-1.5 text-xs">
                 <Label className="text-xs">Model</Label>
                 <select
-                  value={config.qwenModel ?? QWEN_MODELS[0]}
+                  value={normalizeQwenModel(config.qwenModel)}
                   onChange={(e) =>
-                    setConfig((p) => ({ ...p, qwenModel: e.target.value }))
+                    setConfig((p) => ({ ...p, qwenModel: normalizeQwenModel(e.target.value) }))
                   }
                   className="w-full rounded-md border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
                 >
