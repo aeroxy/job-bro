@@ -235,11 +235,12 @@ export default defineBackground(() => {
     if (message && (message as { type?: string }).type === 'QWEN_CHAT_REQUEST') {
       const msgs = (message as any).messages;
       const requestId = (message as any).requestId;
+      const qwenModel = (message as any).qwenModel;
       const controller = new AbortController();
       if (requestId) {
         qwenInFlightRequests.set(requestId, controller);
       }
-      sendQwenChat(msgs, controller.signal)
+      sendQwenChat(msgs, controller.signal, qwenModel)
         .then((result) => {
           if (requestId) qwenInFlightRequests.delete(requestId);
           sendResponse({ ok: true, result });

@@ -178,6 +178,7 @@ export async function chatCompletion(
           type: 'QWEN_CHAT_REQUEST',
           requestId,
           messages: qwenMessages,
+          qwenModel: config.qwenModel,
         });
 
         if (!options?.signal) {
@@ -219,7 +220,7 @@ export async function chatCompletion(
       if (options?.signal?.aborted) {
         throw new DOMException('The user aborted a request.', 'AbortError');
       }
-      return sendQwenChat(qwenMessages, options?.signal);
+      return sendQwenChat(qwenMessages, options?.signal, config.qwenModel);
     }, options?.signal);
   }
 
