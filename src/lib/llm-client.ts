@@ -1,7 +1,7 @@
 import { jsonrepair } from 'jsonrepair'
 
 import { chatCompletionChrome } from './chrome-ai-client'
-import { sendQwenChat } from './qwen/qwen-service'
+import { sendQwenChat, normalizeQwenModel } from './qwen/qwen-service'
 import type { LLMConfig, UserProfile } from '@/types/profile'
 import type { EvidenceItem } from '@/types/evaluation'
 import type { ChatCompletionWithToolsResult, ToolCall, ToolDefinition } from './tools/types'
@@ -158,6 +158,7 @@ export async function chatCompletion(
   // context and bridge the request to the background service worker.
   if (config.backend === 'qwen-chat') {
     const qwenMessages = messages.map(({ role, content }) => ({ role, content }));
+    const qwenModel = normalizeQwenModel(config.qwenModel);
     // Concurrency control. Qwen's anti-bot WAF throttles bursts — all 6
     // evaluators firing at once trips the "被挤爆啦" overload/punish response.
     // Gate through the same per-provider queue the cloud path uses, keyed by a
@@ -178,7 +179,7 @@ export async function chatCompletion(
           type: 'QWEN_CHAT_REQUEST',
           requestId,
           messages: qwenMessages,
-          qwenModel: config.qwenModel,
+          qwenModel,
         });
 
         if (!options?.signal) {
@@ -220,7 +221,7 @@ export async function chatCompletion(
       if (options?.signal?.aborted) {
         throw new DOMException('The user aborted a request.', 'AbortError');
       }
-      return sendQwenChat(qwenMessages, options?.signal, config.qwenModel);
+      return sendQwenChat(qwenMessages, options?.signal, qwenModel);
     }, options?.signal);
   }
 

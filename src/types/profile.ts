@@ -1,3 +1,5 @@
+import type { QwenModel } from '@/lib/qwen/qwen-service'
+
 export interface UserProfile {
   resume: string
   salary_expectation: string
@@ -47,7 +49,7 @@ export interface LLMConfig {
   timeout?: number        // non-stream request timeout in seconds (default 30)
   stream_timeout?: number // per-chunk inactivity timeout in seconds (default 60)
   concurrency?: number    // max concurrent calls for this provider (default 2)
-  qwenModel?: string       // qwen-chat backend only. One of QWEN_MODELS (default 'qwen3.8-max-preview')
+  qwenModel?: QwenModel    // qwen-chat backend only. One of QWEN_MODELS (default 'qwen3.8-max-preview')
 }
 
 export interface LLMProfile {

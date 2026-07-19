@@ -358,9 +358,17 @@ export async function updateQwenCookies(): Promise<CookieResult> {
  */
 export const QWEN_MODELS = ['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.7-plus'] as const;
 
+export type QwenModel = (typeof QWEN_MODELS)[number];
+
+export function normalizeQwenModel(input?: string | null): QwenModel {
+  return (QWEN_MODELS as readonly string[]).includes(input ?? '')
+    ? (input as QwenModel)
+    : QWEN_MODELS[0];
+}
+
 export async function createQwenSession(
   token: string,
-  model: string = QWEN_MODELS[0],
+  model: QwenModel = QWEN_MODELS[0],
 ): Promise<string | null> {
   try {
     // Magic string 'New Chat' perfectly mirrors Qwen Studio's own native frontend
@@ -410,7 +418,7 @@ export interface QwenMessage {
  * Converts standard ChatMessages into a single Qwen user message payload
  * combining system instructions and history.
  */
-function buildQwenMessagesPayload(messages: QwenMessage[]) {
+function buildQwenMessagesPayload(messages: QwenMessage[], model: QwenModel = QWEN_MODELS[0]) {
   const userFid = crypto.randomUUID();
   const assistantFid = crypto.randomUUID();
   const nowInSeconds = Math.floor(Date.now() / 1000);
@@ -439,7 +447,7 @@ function buildQwenMessagesPayload(messages: QwenMessage[]) {
     user_action: 'chat',
     files: [],
     timestamp: nowInSeconds,
-    models: ['qwen3.8-max-preview'],
+    models: [model],
     chat_type: 't2t',
     feature_config: {
       thinking_enabled: true,
@@ -466,7 +474,7 @@ function buildQwenMessagesPayload(messages: QwenMessage[]) {
 export async function sendQwenChat(
   messages: QwenMessage[],
   signal?: AbortSignal,
-  model: string = QWEN_MODELS[0],
+  model: QwenModel = QWEN_MODELS[0],
 ): Promise<string> {
   if (signal?.aborted) {
     return Promise.reject(new DOMException('The user aborted a request.', 'AbortError'));
@@ -508,8 +516,9 @@ export async function sendQwenChatStream(
   onDone: () => void,
   onError: (err: string) => void,
   signal?: AbortSignal,
-  model: string = QWEN_MODELS[0],
+  model: QwenModel = QWEN_MODELS[0],
 ): Promise<void> {
+  model = normalizeQwenModel(model);
   let keepAliveInterval: ReturnType<typeof setInterval> | undefined;
 
   try {
@@ -600,7 +609,7 @@ export async function sendQwenChatStream(
         chat_mode: 'normal',
         model,
         parent_id: null,
-        messages: [buildQwenMessagesPayload(messages)],
+        messages: [buildQwenMessagesPayload(messages, model)],
         timestamp: nowInSeconds,
       };
 
