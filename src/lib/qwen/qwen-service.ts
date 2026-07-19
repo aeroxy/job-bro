@@ -356,7 +356,12 @@ export async function updateQwenCookies(): Promise<CookieResult> {
 /**
  * Creates a new chat session to generate a fresh chat_id
  */
-export async function createQwenSession(token: string): Promise<string | null> {
+export const QWEN_MODELS = ['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.7-plus'] as const;
+
+export async function createQwenSession(
+  token: string,
+  model: string = QWEN_MODELS[0],
+): Promise<string | null> {
   try {
     // Magic string 'New Chat' perfectly mirrors Qwen Studio's own native frontend
     // behavior when creating a blank chat, ensuring our requests are indistinguishable
@@ -377,7 +382,7 @@ export async function createQwenSession(token: string): Promise<string | null> {
       },
       body: JSON.stringify({
         title,
-        models: ['qwen3.7-max'],
+        models: [model],
         chat_mode: 'local',
         chat_type: 't2t',
         timestamp: Date.now(),
@@ -434,7 +439,7 @@ function buildQwenMessagesPayload(messages: QwenMessage[]) {
     user_action: 'chat',
     files: [],
     timestamp: nowInSeconds,
-    models: ['qwen3.7-max'],
+    models: ['qwen3.8-max-preview'],
     chat_type: 't2t',
     feature_config: {
       thinking_enabled: true,
@@ -458,7 +463,11 @@ function buildQwenMessagesPayload(messages: QwenMessage[]) {
  * Sends a non-streaming chat completions request to Qwen using local fetch with spoofed Origin/Referer.
  * Resolves to the final accumulated string (excluding thinking/search output).
  */
-export async function sendQwenChat(messages: QwenMessage[], signal?: AbortSignal): Promise<string> {
+export async function sendQwenChat(
+  messages: QwenMessage[],
+  signal?: AbortSignal,
+  model: string = QWEN_MODELS[0],
+): Promise<string> {
   if (signal?.aborted) {
     return Promise.reject(new DOMException('The user aborted a request.', 'AbortError'));
   }
@@ -484,7 +493,8 @@ export async function sendQwenChat(messages: QwenMessage[], signal?: AbortSignal
           reject(new Error(err));
         }
       },
-      signal
+      signal,
+      model,
     );
   });
 }
@@ -497,7 +507,8 @@ export async function sendQwenChatStream(
   onChunk: (text: string) => void,
   onDone: () => void,
   onError: (err: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  model: string = QWEN_MODELS[0],
 ): Promise<void> {
   let keepAliveInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -564,7 +575,7 @@ export async function sendQwenChatStream(
     // 3. Create active session ONCE. On an anti-bot/overload retry we reuse
     //    this same chat_id — the throttled request never reached the model, so
     //    the chat is still empty and there's no need to POST /chats/new again.
-    const chatId = await createQwenSession(token);
+    const chatId = await createQwenSession(token, model);
     if (!chatId) {
       wrappedOnError('Failed to initialize a Qwen chat session.');
       return;
@@ -587,7 +598,7 @@ export async function sendQwenChatStream(
         incremental_output: true,
         chat_id: chatId,
         chat_mode: 'normal',
-        model: 'qwen3.7-max',
+        model,
         parent_id: null,
         messages: [buildQwenMessagesPayload(messages)],
         timestamp: nowInSeconds,
