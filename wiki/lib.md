@@ -13,7 +13,7 @@ The dispatcher is pure TS and runs in the service worker. Cloud and Chrome are a
 
 Dispatch priority order:
 1.  `chrome-prompt` → `chatCompletionChrome`.
-2.  `qwen-chat` → `sendQwenChat` via the Qwen agent service (bridged through the background when called from the offscreen).
+2.  `qwen-chat` → `sendQwenChat` via the Qwen agent service (bridged through the background when called from the offscreen). `config.qwenModel` (optional, one of `QWEN_MODELS`) is normalized via `normalizeQwenModel` (fallback `QWEN_MODELS[0]`) at this boundary and forwarded to the background as `qwenModel`, then threaded through `createQwenSession` / `sendQwenChatStream` / `buildQwenMessagesPayload`.
 3.  Otherwise → POST to `config.base_url + /chat/completions`.
 
 Options:
@@ -86,11 +86,14 @@ Why it exists: lets users run evaluations without an API key or a self-hosted pr
 
 | Export | Purpose |
 |---|---|
+| `QWEN_MODELS` | `as const` tuple of selectable models: `['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.7-plus']`. `QWEN_MODELS[0]` is the default. |
+| `QwenModel` | Type alias for `(typeof QWEN_MODELS)[number]`. Used by `LLMConfig.qwenModel`. |
+| `normalizeQwenModel(input?)` | Returns a valid `QwenModel` or `QWEN_MODELS[0]`; guards against invalid/empty persisted or imported config values. |
 | `getQwenToken()` | Retrieves the active JWT — first from the `token` cookie on `chat.qwen.ai`, falling back to `chrome.scripting.executeScript` against an open `chat.qwen.ai` tab to pull it from localStorage. |
 | `updateQwenCookies()` | Generates fresh `ssxmod_itna` / `ssxmod_itna2` security cookies via [`cookie-generator.ts`](#qwencookie-generatorts) and writes them to the cookie jar. Called before every completions request. |
-| `createQwenSession(token)` | `POST /api/v2/chats/new` — opens a new chat on the user's account and returns the `chat_id`. |
-| `sendQwenChat(messages, signal?)` | Non-streaming wrapper around `sendQwenChatStream` that accumulates chunks and resolves to the final string. |
-| `sendQwenChatStream(messages, onChunk, onDone, onError, signal?)` | Streams SSE from `POST /api/v2/chat/completions`. Refreshes security cookies, retrieves the token, opens a session, then decodes deltas in real time. A 10-second keep-alive ping (`QWEN_PING` to background) keeps the service worker alive during long responses. |
+| `createQwenSession(token, model?)` | `POST /api/v2/chats/new` — opens a new chat on the user's account and returns the `chat_id`. Sends `models: [model]`. |
+| `sendQwenChat(messages, signal?, model?)` | Non-streaming wrapper around `sendQwenChatStream` that accumulates chunks and resolves to the final string. Forwards `model`. |
+| `sendQwenChatStream(messages, onChunk, onDone, onError, signal?, model?)` | Streams SSE from `POST /api/v2/chat/completions`. Refreshes security cookies, retrieves the token, opens a session, then decodes deltas in real time. `model` (normalized via `normalizeQwenModel`) flows into the session, the message payload's `models`, and the completions `model` field. A 10-second keep-alive ping (`QWEN_PING` to background) keeps the service worker alive during long responses. |
 
 **Anti-bot / overload retry:** Qwen's WAF can answer the completions request with an Alibaba "tmd"/x5sec **punish** body instead of an SSE stream — e.g. `{"ret":["FAIL_SYS_USER_VALIDATE","RGV587_ERROR::SM::哎哟喂,被挤爆啦,请稍后重试"],"data":{"url":".../_____tmd_____/punish?x5secdata=...&action=captcha"}}` ("we're overloaded, please retry later"). It can arrive as a non-2xx body **or** as HTTP 200 with that JSON (no `data:` deltas — previously this silently resolved to `''`). `isQwenAntiBotChallenge()` sniffs the markers (`RGV587_ERROR` / `FAIL_SYS_USER_VALIDATE` / `_____tmd_____` / `x5secdata`) in the error text, the streamed `{error}` event, or the buffered response head. On a hit, `sendQwenChatStream` waits **30s** and **retries the SAME `chat_id`** — session creation (`/chats/new`), token lookup, and one cookie refresh happen once up front; only the completions fetch is re-sent (with fresh `ssxmod_itna` cookies each retry). **Up to 3 retries** (4 total tries); the `abortableDelay` honors the signal so cancel/CANCEL_ANALYSIS during the back-off rejects immediately. Exhausting the retries throws "Qwen is overloaded or rate-limiting requests…". The retry loop lives *inside* the stream (not in `sendQwenChat`) precisely so it doesn't re-`/new`. This path bypasses `llm-client`'s 429/5xx retry entirely.
 
