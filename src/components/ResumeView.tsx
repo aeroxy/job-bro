@@ -1,5 +1,5 @@
-import { ArrowLeft, Download, FileText, Printer, RefreshCw, Sparkles } from 'lucide-react'
-import { useMemo } from 'react'
+import { ArrowLeft, Check, Copy, Download, FileText, Printer, RefreshCw, Sparkles } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { marked } from 'marked'
 
@@ -30,12 +30,25 @@ export function ResumeView({
   onRegenerateFresh,
   onBack,
 }: ResumeViewProps) {
+  const [copied, setCopied] = useState(false)
+
   const html = useMemo(() => {
     if (!markdown) return ''
     return marked.parse(markdown, { async: false }) as string
   }, [markdown])
 
   const isGenerating = status === 'generating'
+
+  const handleCopy = async () => {
+    if (!markdown) return
+    try {
+      await navigator.clipboard.writeText(markdown)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy text: ', err)
+    }
+  }
 
   const handleDownloadMd = () => {
     if (!markdown) return
@@ -164,6 +177,15 @@ export function ResumeView({
           {/* Download row */}
           {markdown && (
             <div className="flex gap-2">
+              <Button
+                onClick={handleCopy}
+                variant="outline"
+                size="sm"
+                className="flex-1 cursor-pointer"
+              >
+                {copied ? <Check className="size-3 text-green-500" /> : <Copy className="size-3" />}
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
               <Button
                 onClick={handleDownloadMd}
                 variant="outline"
