@@ -86,7 +86,7 @@ Why it exists: lets users run evaluations without an API key or a self-hosted pr
 
 | Export | Purpose |
 |---|---|
-| `QWEN_MODELS` | `as const` tuple of selectable models: `['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.7-plus']`. `QWEN_MODELS[0]` is the default. |
+| `QWEN_MODELS` | `as const` tuple of selectable models: `['qwen3.8-max', 'qwen3.7-max', 'qwen3.7-plus']`. `QWEN_MODELS[0]` is the default. |
 | `QwenModel` | Type alias for `(typeof QWEN_MODELS)[number]`. Used by `LLMConfig.qwenModel`. |
 | `normalizeQwenModel(input?)` | Returns a valid `QwenModel` or `QWEN_MODELS[0]`; guards against invalid/empty persisted or imported config values. |
 | `getQwenToken()` | Retrieves the active JWT — first from the `token` cookie on `chat.qwen.ai`, falling back to `chrome.scripting.executeScript` against an open `chat.qwen.ai` tab to pull it from localStorage. |

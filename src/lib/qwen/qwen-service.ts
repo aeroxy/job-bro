@@ -356,7 +356,7 @@ export async function updateQwenCookies(): Promise<CookieResult> {
 /**
  * Creates a new chat session to generate a fresh chat_id
  */
-export const QWEN_MODELS = ['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.7-plus'] as const;
+export const QWEN_MODELS = ['qwen3.8-max', 'qwen3.7-max', 'qwen3.7-plus'] as const;
 
 export type QwenModel = (typeof QWEN_MODELS)[number];
 
