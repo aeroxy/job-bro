@@ -25,6 +25,11 @@ export default defineConfig({
     },
     build: {
       minify: false,
+      // Preload hints buy nothing for a locally-loaded extension, and Vite emits
+      // them with `crossorigin` — which on a chrome-extension:// page never
+      // matches the module import's own fetch, so Chrome logs every shared chunk
+      // as "preloaded but not used".
+      modulePreload: false,
     },
   }),
   manifest: {

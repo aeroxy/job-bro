@@ -239,9 +239,11 @@ The runner resolves an output strategy per evaluator via `resolveOutput()`:
 
 | Path | When | How |
 |---|---|---|
-| **Strict json_schema** | `structured_output === true` AND evaluator has no research tools | `response_format.json_schema` enforces shape server-side. No structured-output channel, no parse/retry. |
+| **Strict json_schema** | `structured_output === true` AND evaluator has no research tools | `response_format.json_schema` (`openai`) / `output_config.format` (`anthropic`) enforces shape server-side. No structured-output channel, no parse/retry. |
 | **In-house structured-output channel** (`provide_verdict`) | Otherwise (broad: any evaluator when structured_output off, or tool-using evaluators always) | The model "calls" `provide_verdict` with the verdict object as its arguments. The agent loop intercepts the call as the final answer (no handler runs, no tool result is produced for the model to read). |
 | **Chrome / Qwen backend** | `chrome-prompt` / `qwen-chat` | No tools, no json_schema. Inline-prompt + parseJSON. |
+
+`resolveOutput` treats `anthropic` exactly like `openai` — both tool-call and both support strict schemas, so the same three paths apply.
 
 The structured-output channel is the fallback for evaluators that can't use strict json_schema — namely any evaluator when `structured_output` is off, and tool-using evaluators (risk, salary, growth, preference) even when `structured_output` is on (strict json_schema blocks `tool_calls`).
 

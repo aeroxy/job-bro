@@ -16,12 +16,12 @@ export interface JobPreferences {
   years_of_experience: number
 }
 
-export type LLMBackend = 'openai' | 'chrome-prompt' | 'qwen-chat'
+export type LLMBackend = 'openai' | 'anthropic' | 'chrome-prompt' | 'qwen-chat'
 
 export interface LLMConfig {
   backend?: LLMBackend    // default: 'openai' (back-compat for existing configs)
-  base_url: string        // openai backend only
-  model: string           // openai backend only
+  base_url: string        // openai + anthropic backends only
+  model: string           // openai + anthropic backends only
   api_key?: string
   custom_headers?: string // JSON string of key-value pairs, e.g. '{"X-API-Key": "abc"}'
   stream_mode?: boolean
@@ -33,7 +33,8 @@ export interface LLMConfig {
                           // makes a single call with no tools.
   structured_output?: boolean // cloud backend only. Default false. When true,
                               // evaluators pass a JSON Schema via
-                              // response_format.json_schema so the model
+                              // response_format.json_schema ('openai') or
+                              // output_config.format ('anthropic') so the model
                               // can't drift shape and parseJSON retries drop
                               // to near zero. Requires a provider that
                               // supports the OpenAI json_schema response
@@ -50,6 +51,13 @@ export interface LLMConfig {
   stream_timeout?: number // per-chunk inactivity timeout in seconds (default 60)
   concurrency?: number    // max concurrent calls for this provider (default 2)
   qwenModel?: QwenModel    // qwen-chat backend only. One of QWEN_MODELS (default 'qwen3.8-max')
+  session_id?: string     // anthropic backend only, and NOT persisted — stamped
+                          // per run by llm-handlers and sent as
+                          // `x-claude-code-session-id`. It rides on the config
+                          // because that's the one object already threaded
+                          // through the runner, every evaluator and the agent
+                          // loop; see `sessionIdFor` in lib/llm-handlers.ts for
+                          // why the header matters at all.
 }
 
 export interface LLMProfile {

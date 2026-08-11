@@ -35,25 +35,64 @@ export type ToolCallCallback = (evaluator: string, call: ToolCall) => void
 // summary + aggregation step completes" gap.
 export type EvaluatorResultCallback = (evaluator: string, result: unknown) => void
 
-async function loadConfigAndProfile(): Promise<
+// A stable conversation identity, sent as `x-claude-code-session-id` on the
+// Anthropic path (see `anthropicRequest` in lib/llm-client.ts). Derived from the
+// job rather than random, so re-analysing, generating a resume for, and chatting
+// about the same posting all land in one session.
+//
+// It exists because prompt cache entries are partitioned by session, and a
+// session id that churns means every request writes a fresh entry and reads
+// nothing. claude-proxy (github.com/aeroxy/claude-proxy) derives one from the
+// first user message when the client doesn't send this header, and that message
+// is our whole JD — so the derived id changed on every call and a byte-identical
+// system block was read zero times. Sending our own short-circuits that.
+//
+// Shaped as a UUID (v8, the "custom" version) because that's what the header
+// carries in Claude Code itself; proxies that validate the format accept it.
+async function sessionIdFor(seed: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed))
+  const hex = Array.from(new Uint8Array(digest).slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('')
+  // RFC 4122 variant: top two bits of octet 8 must be 0b10.
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
+async function loadConfigAndProfile(
+  // Seed for the Anthropic session id above. Omit for backends that ignore it.
+  sessionSeed?: string,
+): Promise<
   | { ok: true; profile: UserProfile; config: NonNullable<Awaited<ReturnType<typeof getLLMConfig>>>; customPrompt: string }
   | { ok: false; error: string }
 > {
   const profile = await getProfile()
   if (!profile) return { ok: false, error: 'No profile configured. Set up your profile first.' }
 
-  const config = await getLLMConfig()
+  let config = await getLLMConfig()
   if (!config) return { ok: false, error: 'No LLM configured. Open Settings.' }
 
-  // openai backend requires base_url + model; chrome backend doesn't.
-  if ((config.backend ?? 'openai') === 'openai') {
+  // openai/anthropic backends require base_url + model; chrome backend doesn't.
+  const backend = config.backend ?? 'openai'
+  if (backend === 'openai' || backend === 'anthropic') {
     if (!config.base_url || !config.model) {
       return { ok: false, error: 'No LLM configured. Set up base URL and model in Settings.' }
     }
   }
 
+  // Stamped on the config rather than threaded as an option: config is already
+  // passed to the runner, every evaluator and the agent loop. Runtime-only —
+  // nothing writes this back to storage.
+  if (backend === 'anthropic' && sessionSeed) {
+    config = { ...config, session_id: await sessionIdFor(sessionSeed) }
+  }
+
   const customPrompt = await getCustomPrompt(config.backend)
   return { ok: true, profile, config, customPrompt: customPrompt.trim() }
+}
+
+// The stable part of a posting's identity — the URL when we have one, else
+// whatever else pins it down.
+function jobSeed(job: ExtractedJob): string {
+  return job.url || job.job_id || `${job.title}|${job.company}`
 }
 
 export async function runAnalysis(
@@ -65,7 +104,7 @@ export async function runAnalysis(
   // Resume: fulfilled results from a prior run to reuse instead of re-running.
   priorResults?: Partial<AggregatedReport['evaluators']>,
 ): Promise<AnalyzeResult> {
-  const loaded = await loadConfigAndProfile()
+  const loaded = await loadConfigAndProfile(jobSeed(job))
   if (!loaded.ok) return loaded
 
   try {
@@ -95,7 +134,7 @@ export async function runResume(
   qnaHistory?: ChatTurn[],
   signal?: AbortSignal,
 ): Promise<ResumeResult> {
-  const loaded = await loadConfigAndProfile()
+  const loaded = await loadConfigAndProfile(jobSeed(job))
   if (!loaded.ok) return loaded
 
   try {
@@ -176,7 +215,10 @@ export async function runChat(
   jobMarkdown: string,
   analysisContext: string,
 ): Promise<ChatResult> {
-  const loaded = await loadConfigAndProfile()
+  // Chat only receives the rendered JD, not the ExtractedJob, so it seeds from
+  // that instead — stable across a conversation's turns, which is what the cache
+  // needs here, but a different partition from the analysis run for the same job.
+  const loaded = await loadConfigAndProfile(jobMarkdown)
   if (!loaded.ok) return loaded
 
   const messages: ChatMessage[] = []

@@ -1,5 +1,15 @@
 import { jsonrepair } from 'jsonrepair'
 
+import {
+  ANTHROPIC_VERSION,
+  applyAnthropicStreamEvent,
+  buildAnthropicBody,
+  finishAnthropicStream,
+  newAnthropicStreamState,
+  readAnthropicResponse,
+  type AnthropicBodyOptions,
+  type AnthropicStreamEvent,
+} from './anthropic-messages'
 import { chatCompletionChrome } from './chrome-ai-client'
 import { sendQwenChat, normalizeQwenModel } from './qwen/qwen-service'
 import type { LLMConfig, UserProfile } from '@/types/profile'
@@ -223,6 +233,28 @@ export async function chatCompletion(
       }
       return sendQwenChat(qwenMessages, options?.signal, qwenModel);
     }, options?.signal);
+  }
+
+  // Anthropic Messages backend. Same bring-your-own-key shape as the OpenAI
+  // path — the API itself, a gateway, or a local claude-proxy all work — only
+  // the wire format differs, and `anthropic-messages.ts` translates it.
+  if (config.backend === 'anthropic') {
+    return getQueue(config.base_url).run(
+      config.concurrency ?? 2,
+      async () => {
+        const { content } = await anthropicRequest(
+          config,
+          messages,
+          {
+            max_tokens: options?.max_tokens ?? config.max_tokens ?? DEFAULT_MAX_TOKENS,
+            temperature: options?.temperature ?? config.temperature,
+          },
+          options?.signal
+        )
+        return content
+      },
+      options?.signal
+    )
   }
 
   const queue = getQueue(config.base_url)
@@ -581,7 +613,229 @@ export async function chatCompletionWithTools(
 
   const queue = getQueue(config.base_url)
   const concurrency = config.concurrency ?? 2
+
+  if (config.backend === 'anthropic') {
+    return queue.run(
+      concurrency,
+      () =>
+        anthropicRequest(
+          config,
+          messages,
+          {
+            max_tokens: options.max_tokens ?? config.max_tokens ?? DEFAULT_MAX_TOKENS,
+            temperature: options.temperature ?? config.temperature,
+            // Strict output only when no tools are in play — the runner already
+            // guarantees this pairing (see resolveOutput), and Anthropic won't
+            // accept output_config.format alongside a tools array.
+            jsonSchema: options.tools.length === 0 ? options.jsonSchema : undefined,
+            tools: options.tools,
+            tool_choice: options.tool_choice ?? 'auto',
+          },
+          options.signal
+        ),
+      options.signal
+    )
+  }
+
   return queue.run(concurrency, () => toolCompletionRequest(config, messages, options), options.signal)
+}
+
+// Anthropic Messages path: POSTs `{base_url}/messages`.
+//
+// Always streams, even though nothing consumes the deltas: it makes the timeout
+// idle-based rather than total, so a model that thinks for minutes (Opus 5 has
+// thinking on by default) doesn't trip it while a genuinely dead connection
+// still does.
+async function anthropicRequest(
+  config: LLMConfig,
+  messages: ChatMessage[],
+  bodyOptions: AnthropicBodyOptions,
+  signal?: AbortSignal
+): Promise<ChatCompletionWithToolsResult> {
+  const baseUrl = config.base_url.trim().replace(/\/+$/, '')
+  if (!baseUrl) throw new Error('LLM base URL is not configured')
+
+  const headers: Record<string, string> = {
+    'anthropic-version': ANTHROPIC_VERSION,
+    // api.anthropic.com refuses browser-origin requests without this opt-in;
+    // endpoints that don't check for it ignore it.
+    'anthropic-dangerous-direct-browser-access': 'true',
+  }
+  if (config.api_key) headers['x-api-key'] = config.api_key
+  // Sent whenever we have one — see `sessionIdFor` in lib/llm-handlers.ts. A
+  // proxy that reads it stops deriving an id from the prompt (which changes on
+  // every call, so nothing is ever a cache read); anything that doesn't
+  // recognise the header ignores it.
+  if (config.session_id) headers['x-claude-code-session-id'] = config.session_id
+  if (config.custom_headers) {
+    try {
+      Object.assign(headers, JSON.parse(config.custom_headers))
+    } catch {
+      /* ignore malformed custom headers */
+    }
+  }
+
+  const state = newAnthropicStreamState()
+  await postSSE(
+    `${baseUrl}/messages`,
+    {
+      headers,
+      body: buildAnthropicBody(config, messages, { ...bodyOptions, stream: true }),
+      // Idle-between-chunks, not total: the same knob the OpenAI stream path uses.
+      idleMs: (config.stream_timeout ?? 60) * 1000,
+      signal,
+    },
+    (event) => {
+      if (event.type === 'error') {
+        throw new Error(
+          `LLM API error (${event.error?.type ?? 'stream'}): ${event.error?.message ?? 'unknown'}`
+        )
+      }
+      applyAnthropicStreamEvent(state, event)
+    }
+  )
+
+  const { content, tool_calls, stopReason, refusalDetail } = readAnthropicResponse(
+    finishAnthropicStream(state)
+  )
+  if (stopReason === 'refusal') {
+    throw new Error(`The model declined this request${refusalDetail ? ` (${refusalDetail})` : ''}.`)
+  }
+
+  const text = stripThinkBlock(content)
+  if (!text && !tool_calls) {
+    if (stopReason === 'max_tokens') throw new Error(truncatedMessage(bodyOptions.max_tokens))
+    throw new Error('LLM returned empty response')
+  }
+  return { content: text, tool_calls }
+}
+
+interface PostSSEOptions {
+  headers: Record<string, string>
+  body: unknown
+  idleMs: number
+  signal?: AbortSignal
+}
+
+// Hands each parsed SSE event to `onEvent` and resolves once the stream ends.
+// Same retry policy as the other paths, with two deliberate differences: the
+// timeout is rearmed on every chunk (idle, not total), and a failure is only
+// retried while nothing has been delivered yet — once events are out, replaying
+// from scratch would duplicate accumulated state.
+async function postSSE(
+  url: string,
+  options: PostSSEOptions,
+  onEvent: (event: AnthropicStreamEvent) => void
+): Promise<void> {
+  const { headers, body, idleMs, signal } = options
+  const httpRetryDelays = [3000, 10000]
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const rearm = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => controller.abort(new DOMException('Stream timed out', 'TimeoutError')), idleMs)
+    }
+    rearm()
+    let delivered = false
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...headers },
+        body: JSON.stringify(body),
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error')
+        const retryable = [429, 500, 502, 503, 504].includes(response.status)
+        if (retryable && attempt < 2) {
+          lastError = new Error(`HTTP ${response.status}: ${errorText}`)
+          clearTimeout(timer)
+          await delay(httpRetryDelays[attempt])
+          continue
+        }
+        throw new Error(`LLM API error (${response.status}): ${errorText}`)
+      }
+      if (!response.body) throw new Error('Response body is null — streaming not supported by this endpoint')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      const emit = (block: string) => {
+        const event = parseSSEBlock(block)
+        if (!event) return
+        // `delivered` is set after the handler returns, so an `error` event
+        // arriving first still throws from a retryable position.
+        onEvent(event)
+        delivered = true
+      }
+      // Events are separated by a blank line; the regex tolerates CRLF.
+      const drain = () => {
+        let boundary: RegExpExecArray | null
+        while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+          const block = buffer.slice(0, boundary.index)
+          buffer = buffer.slice(boundary.index + boundary[0].length)
+          emit(block)
+        }
+      }
+
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          rearm()
+          buffer += decoder.decode(value, { stream: true })
+          drain()
+        }
+        // A stream may end without the trailing blank line, and the decoder can
+        // still hold the tail of a multi-byte character split across the last
+        // two chunks. Flush both, or the final event — usually the one closing
+        // out the answer — is silently dropped.
+        buffer += decoder.decode()
+        drain()
+        if (buffer.trim()) emit(buffer)
+      } finally {
+        // Leaving mid-stream (a throw from `onEvent`, or a retry) otherwise
+        // leaves the body open holding the connection. A no-op once done.
+        reader.cancel().catch(() => {})
+      }
+
+      clearTimeout(timer)
+      return
+    } catch (e) {
+      clearTimeout(timer)
+      if (!delivered && isTransientNetworkError(e, signal) && attempt < 2) {
+        lastError = e instanceof Error ? e : new Error(String(e))
+        await delay(httpRetryDelays[attempt])
+        continue
+      }
+      throw e instanceof Error ? e : new Error(String(e))
+    }
+  }
+
+  throw lastError ?? new Error('LLM streaming request failed')
+}
+
+// One `data:`-carrying SSE block → the event object. The `event:` line is
+// redundant (the JSON repeats the type), so only `data:` is read. Returns null
+// for keep-alive comments and anything unparseable.
+function parseSSEBlock(block: string): AnthropicStreamEvent | null {
+  const data = block
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice('data:'.length).trim())
+    .join('')
+  if (!data || data === '[DONE]') return null
+  try {
+    return JSON.parse(data) as AnthropicStreamEvent
+  } catch {
+    return null
+  }
 }
 
 // JSON Schema spec passed to providers that support OpenAI's strict

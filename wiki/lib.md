@@ -2,8 +2,9 @@
 
 ## `llm-client.ts`
 
-LLM dispatcher. Routes to one of three backends based on `LLMConfig.backend`:
+LLM dispatcher. Routes to one of four backends based on `LLMConfig.backend`:
 - `'openai'` (default) — OpenAI-compatible HTTP fetch to a cloud model.
+- `'anthropic'` — Anthropic Messages API (`POST {base_url}/messages`): the API itself, a gateway, or a local [claude-proxy](https://github.com/aeroxy/claude-proxy). Same bring-your-own-key shape as `'openai'`; only the wire format differs, and [`anthropic-messages.ts`](#anthropic-messagests) translates it. Always streams.
 - `'chrome-prompt'` — Chrome's built-in `LanguageModel` API (Gemini Nano), via [`chrome-ai-client.ts`](#chrome-ai-clientts).
 - `'qwen-chat'` — **Delegated agent**, not a model. Calls into [`qwen/qwen-service.ts`](#qwenqwen-servicets), which drives the user's live `chat.qwen.ai` session. Qwen runs its own native web search, read-page, and thinking on the server side — the extension's `WEB_SEARCH_TOOL` / `READ_PAGE_TOOL` are not sent. `chatCompletion` is reused as the dispatch entry point for API symmetry, but on this branch the semantics are "delegate task to agent", not "prompt a model".
 
@@ -14,7 +15,8 @@ The dispatcher is pure TS and runs in the service worker. Cloud and Chrome are a
 Dispatch priority order:
 1.  `chrome-prompt` → `chatCompletionChrome`.
 2.  `qwen-chat` → `sendQwenChat` via the Qwen agent service (bridged through the background when called from the offscreen). `config.qwenModel` (optional, one of `QWEN_MODELS`) is normalized via `normalizeQwenModel` (fallback `QWEN_MODELS[0]`) at this boundary and forwarded to the background as `qwenModel`, then threaded through `createQwenSession` / `sendQwenChatStream` / `buildQwenMessagesPayload`.
-3.  Otherwise → POST to `config.base_url + /chat/completions`.
+3.  `anthropic` → `anthropicRequest` (queued like Cloud), which streams `config.base_url + /messages`. `json_mode` has no equivalent and is ignored — JSON shape comes from the prompt, the strict `output_config.format` path, or the `provide_verdict` channel.
+4.  Otherwise → POST to `config.base_url + /chat/completions`.
 
 Options:
 - `json_mode: boolean` — sets `response_format: { type: "json_object" }`
@@ -34,14 +36,44 @@ Options:
 
 ### `chatCompletionWithTools(config, messages, tools, options)`
 
-Non-streaming tool-call variant for the **Cloud** backend. Same HTTP plumbing, but `tools` is forwarded as `body.tools` and the response may include `tool_calls`. Returns a `ChatCompletionWithToolsResult` (`{ content, tool_calls, raw }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` and `name` for tool results).
+Tool-call variant for the keyed HTTP backends. On **Cloud** it is non-streaming and `tools` is forwarded as `body.tools`; on **Anthropic** it streams and the tools are translated to Anthropic's `input_schema` shape. Either way the response may include `tool_calls`, returned as a `ChatCompletionWithToolsResult` (`{ content, tool_calls, raw }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` and `name` for tool results).
 
 Two backends short-circuit here:
 
 - **Chrome** — `resolveOutput` routes it to the inline-prompt path (Gemini Nano has no native tool API and ignores `response_format.json_schema`), so Chrome arrives with `tools = []`. Returns `{ content }` from a single `chatCompletion` call — the agent loop terminates after one iteration.
 - **Qwen** — Qwen is an *agent* with server-side tools, not a model that calls ours. Forwarding our `WEB_SEARCH_TOOL` / `READ_PAGE_TOOL` schemas would be meaningless and confuse its prompt, so this function short-circuits to `chatCompletion` and returns `{ content }`. Research is done server-side by Qwen itself.
 
-Cloud is the only path that genuinely participates in the OpenAI tool-calling protocol.
+Cloud and Anthropic are the two paths that genuinely tool-call; Anthropic's `tool_use` blocks are re-serialised as OpenAI-shaped `tool_calls`, so `lib/agent.ts` and the `provide_verdict` channel work unchanged.
+
+---
+
+### `anthropicRequest(config, messages, bodyOptions, signal)`
+
+The Anthropic transport, private to `llm-client.ts`. Both `chatCompletion` and `chatCompletionWithTools` funnel into it, inside the same per-`base_url` `RequestQueue` the Cloud path uses.
+
+**Always streams**, even though nothing consumes the deltas: it makes the timeout idle-based (`config.stream_timeout ?? 60`, rearmed per chunk) rather than total, so a model that thinks for minutes — Claude Opus 5 has thinking on by default — can't trip it while a dead connection still does. `config.stream_mode` is therefore irrelevant here and its switch is hidden in Settings; `config.timeout` is unused.
+
+Headers:
+- `anthropic-version: 2023-06-01`
+- `anthropic-dangerous-direct-browser-access: true` — `api.anthropic.com` refuses browser-origin requests without it; endpoints that don't check ignore it.
+- `x-api-key: config.api_key` (not a bearer token)
+- `x-claude-code-session-id: config.session_id` when set — see [`llm-handlers.ts`](#llm-handlersts).
+- plus `config.custom_headers`.
+
+`postSSE` is the streaming sibling of the other paths' fetch loops: same `[3s, 10s]` retry on 429/5xx and transient network errors, but a failure is only retried **while nothing has been delivered** — once events are out, replaying would duplicate accumulated state. It parses blank-line-separated SSE blocks (CRLF tolerant), flushes the decoder tail at end-of-stream so the last event isn't dropped, and cancels the reader on every exit path. A `type: 'error'` event throws immediately (still from a retryable position).
+
+After the stream, `stop_reason: 'refusal'` throws with the `stop_details` category/explanation; an empty result with `stop_reason: 'max_tokens'` throws the shared truncation message.
+
+---
+
+### `anthropic-messages.ts`
+
+Pure translation between the OpenAI-shaped `ChatMessage` / `ToolDefinition` types and Anthropic's Messages API. No fetch, no retry — that policy stays in `llm-client.ts`.
+
+- `toAnthropicMessages` — hoists `system` turns into the top-level field (Anthropic rejects a system message anywhere else), turns `tool` turns into `tool_result` blocks on a **user** turn, and assistant `tool_calls` into `tool_use` blocks. Same-role turns are merged, which is what puts a whole round of parallel tool results into one user turn — splitting them teaches the model to stop calling tools in parallel.
+- `buildAnthropicBody` — required `max_tokens`; `system` as a one-block array carrying a `cache_control: {type:'ephemeral'}` breakpoint (it's the custom prompt + resume + preferences, the largest constant in the request); `temperature` omitted unless configured (Opus 5 / Sonnet 5 / Opus 4.7+ reject it outright); `output_config.format` for strict JSON; tools mapped to `{name, description, input_schema}`.
+- `readAnthropicResponse` — text blocks joined, `tool_use` blocks re-serialised as `tool_calls` (arguments back to a JSON string), plus `stop_reason` and a flattened `stop_details`.
+- Stream folding — `newAnthropicStreamState` / `applyAnthropicStreamEvent` / `finishAnthropicStream`. Needed because a `tool_use` block's arguments arrive as `input_json_delta` fragments that are only valid JSON once concatenated; `finishAnthropicStream` collapses the accumulated blocks into the non-streaming response shape so `readAnthropicResponse` is the only place that interprets a reply. Malformed/truncated tool JSON becomes `{}` rather than dropping the call — the transcript still lines up with its `tool_result`.
 
 ---
 
@@ -187,7 +219,13 @@ Orchestration glue. Always runs in the service worker. The Chrome backend now fl
 | `runChat(question, history, jobMarkdown, analysisContext)` | `{ ok: true, answer } \| { ok: false, error }` | `background.ts` |
 | `buildChatSystemPrompt(profile, jobMarkdown, analysisContext)` | `string` | `ReportChat` (used by `useChromeChatSession` on the Chrome path) |
 
-Each loads `profile`, `llmConfig`, and `customPrompt` from `chrome.storage.local` internally. Cloud backend additionally validates `base_url` + `model`; Chrome backend skips that check.
+Each loads `profile`, `llmConfig`, and `customPrompt` from `chrome.storage.local` internally. Cloud and Anthropic backends additionally validate `base_url` + `model`; Chrome backend skips that check.
+
+**Anthropic session id.** On the `'anthropic'` backend, `loadConfigAndProfile(sessionSeed)` stamps a runtime-only `config.session_id` (never written back to storage) that `anthropicRequest` sends as `x-claude-code-session-id`. It rides on the config because that's the one object already threaded through the runner, every evaluator and the agent loop.
+
+`sessionIdFor(seed)` is a SHA-256 of the seed formatted as a UUID (v8 — the "custom" version, with the RFC 4122 variant bits set), so it is **deterministic**: re-analysing, generating a resume for, and chatting about the same posting land in one session. `runAnalysis` / `runResume` seed from `job.url || job.job_id || "title|company"`; `runChat` only receives the rendered JD, so it seeds from that — stable across a conversation's turns, but a different partition from the analysis run.
+
+Why it matters: prompt-cache entries are partitioned by session, and a churning id means every request writes a fresh entry and reads nothing. claude-proxy derives an id from the first user message when the client sends no header — and that message is our whole JD, so the derived id changed on every call and a byte-identical system block was read zero times. Sending our own short-circuits the derivation. `api.anthropic.com` ignores the header.
 
 ---
 
