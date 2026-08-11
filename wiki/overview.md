@@ -20,7 +20,7 @@
 | Styling | Tailwind CSS 4 |
 | Icons | Lucide React |
 | Storage | `chrome.storage.local` + IndexedDB (idb) |
-| LLM Integration | OpenAI-compatible HTTP · Chrome built-in AI (Gemini Nano) · Qwen Chat (delegated agent via user's `chat.qwen.ai` session) |
+| LLM Integration | OpenAI-compatible HTTP · Anthropic Messages (API, gateway, or claude-proxy) · Chrome built-in AI (Gemini Nano) · Qwen Chat (delegated agent via user's `chat.qwen.ai` session) |
 | Markdown | `marked` |
 | Build | Vite (via WXT) |
 | Package Manager | Bun |

@@ -1,4 +1,4 @@
-import { ArrowLeft, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, AlertCircle, RefreshCw, Key, Fingerprint } from 'lucide-react'
+import { ArrowLeft, Bot, Cloud, Cpu, Download, Eye, EyeOff, Trash2, CheckCircle2, AlertCircle, RefreshCw, Key, Fingerprint } from 'lucide-react'
 import { useState, useEffect, useCallback, ReactNode } from 'react'
 
 import { QwenIcon } from '@/components/icons/QwenIcon'
@@ -59,9 +59,12 @@ export function SettingsForm({
 
   const chromeAi = useChromeAiStatus()
   const backend: LLMBackend = config.backend ?? 'openai'
+  // 'api' covers both keyed HTTP backends — they share every field below; only
+  // the wire format and a few hints differ, hence `isAnthropic`.
   const providerMode: 'chrome' | 'api' | 'qwen-chat' =
     backend === 'chrome-prompt' ? 'chrome' :
     backend === 'qwen-chat' ? 'qwen-chat' : 'api'
+  const isAnthropic = backend === 'anthropic'
 
   // Qwen Chat States
   const [qwenToken, setQwenToken] = useState<string | null>(null)
@@ -201,10 +204,12 @@ export function SettingsForm({
             <BackendOption
               icon={<Cloud className="size-3.5" />}
               label="Cloud"
-              description="OpenAI API"
-              selected={backend === 'openai'}
+              description="OpenAI or Claude"
+              selected={providerMode === 'api'}
               disabled={false}
-              onClick={() => setConfig((p) => ({ ...p, backend: 'openai' }))}
+              // Re-selecting Cloud must not clobber an Anthropic profile back to
+              // OpenAI — the format lives on the profile (see API Format below).
+              onClick={() => setConfig((p) => ({ ...p, backend: p.backend === 'anthropic' ? 'anthropic' : 'openai' }))}
             />
             <BackendOption
               icon={<Cpu className="size-3.5" />}
@@ -427,10 +432,45 @@ export function SettingsForm({
             <h3 className="text-xs font-semibold mb-3">Configuration</h3>
 
             <div className="space-y-3">
+              {/* Saved per profile: one cloud provider, two possible wire
+                  formats. Stored as `config.backend` ('openai' | 'anthropic'),
+                  which is what llm-client dispatches on. */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">API Format</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <BackendOption
+                    icon={<Cloud className="size-3.5" />}
+                    label="OpenAI"
+                    description="/chat/completions"
+                    selected={!isAnthropic}
+                    disabled={false}
+                    onClick={() => setConfig((p) => ({ ...p, backend: 'openai' }))}
+                  />
+                  <BackendOption
+                    icon={<Bot className="size-3.5" />}
+                    label="Anthropic"
+                    description="/messages"
+                    selected={isAnthropic}
+                    disabled={false}
+                    onClick={() => setConfig((p) => ({ ...p, backend: 'anthropic' }))}
+                  />
+                </div>
+                {isAnthropic && (
+                  <p className="text-[10px] text-muted-foreground leading-normal">
+                    Claude Messages API — the Anthropic API itself, a gateway, or a local{' '}
+                    <a href="https://github.com/aeroxy/claude-proxy" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">claude-proxy</a>.
+                    The key goes out as <code className="text-[10px]">x-api-key</code>, and each job gets
+                    a stable <code className="text-[10px]">x-claude-code-session-id</code> so prompt-cache
+                    entries survive across its evaluators, resume and chat. Always streams, so
+                    &ldquo;Stream Timeout&rdquo; is the one that applies.
+                  </p>
+                )}
+              </div>
+
               <div className="space-y-1.5">
                 <Label className="text-xs">API Base URL</Label>
                 <Input
-                  placeholder="https://api.openai.com/v1"
+                  placeholder={isAnthropic ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'}
                   value={config.base_url}
                   onChange={(e) => setConfig((p) => ({ ...p, base_url: e.target.value }))}
                   className="text-xs"
@@ -440,7 +480,7 @@ export function SettingsForm({
               <div className="space-y-1.5">
                 <Label className="text-xs">Model</Label>
                 <Input
-                  placeholder="gpt-4o"
+                  placeholder={isAnthropic ? 'claude-opus-5' : 'gpt-4o'}
                   value={config.model}
                   onChange={(e) => setConfig((p) => ({ ...p, model: e.target.value }))}
                   className="text-xs"
@@ -503,7 +543,7 @@ export function SettingsForm({
                     className="text-xs"
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    {config.stream_mode ? 'Not used in stream mode' : 'Max wait for full response'}
+                    {isAnthropic || config.stream_mode ? 'Not used in stream mode' : 'Max wait for full response'}
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -522,7 +562,7 @@ export function SettingsForm({
                     className="text-xs"
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    {config.stream_mode ? 'Max inactivity between chunks' : 'Not used without stream mode'}
+                    {isAnthropic || config.stream_mode ? 'Max inactivity between chunks' : 'Not used without stream mode'}
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -611,11 +651,15 @@ export function SettingsForm({
               <div>
                 <Label className="text-xs">Use Structured Output</Label>
                 <p className="text-[10px] text-muted-foreground">
-                  Send each evaluator a strict JSON Schema via{' '}
-                  <code className="text-[10px]">response_format.json_schema</code> so the model can&rsquo;t
-                  drift shape. Eliminates the &ldquo;fix your JSON&rdquo; retry path. Requires a provider
-                  that supports the OpenAI json_schema format (OpenAI, Groq, Together, Fireworks, vLLM).
-                  Disable for local servers that silently ignore unknown response_format fields.
+                  Send each tool-free evaluator a strict JSON Schema via{' '}
+                  <code className="text-[10px]">
+                    {isAnthropic ? 'output_config.format' : 'response_format.json_schema'}
+                  </code>{' '}
+                  so the model can&rsquo;t drift shape. Eliminates the &ldquo;fix your JSON&rdquo; retry
+                  path.{' '}
+                  {isAnthropic
+                    ? 'Needs a Claude model (and proxy) that supports structured outputs — Opus 4.8+, Sonnet 5, Haiku 4.5.'
+                    : 'Requires a provider that supports the OpenAI json_schema format (OpenAI, Groq, Together, Fireworks, vLLM). Disable for local servers that silently ignore unknown response_format fields.'}
                 </p>
               </div>
               <Switch
@@ -623,18 +667,22 @@ export function SettingsForm({
                 onCheckedChange={(checked) => setConfig((p) => ({ ...p, structured_output: checked }))}
               />
             </div>
-            <div className="flex items-center justify-between border-t pt-3">
-              <div>
-                <Label className="text-xs">Stream Mode</Label>
-                <p className="text-[10px] text-muted-foreground">
-                  Use SSE streaming for LLM calls. Enable if you experience gateway timeouts on large requests.
-                </p>
+            {/* The Anthropic path always streams (its timeout is idle-based, so a
+                long think can't trip it), so there's nothing to toggle there. */}
+            {!isAnthropic && (
+              <div className="flex items-center justify-between border-t pt-3">
+                <div>
+                  <Label className="text-xs">Stream Mode</Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    Use SSE streaming for LLM calls. Enable if you experience gateway timeouts on large requests.
+                  </p>
+                </div>
+                <Switch
+                  checked={config.stream_mode ?? false}
+                  onCheckedChange={(checked) => setConfig((p) => ({ ...p, stream_mode: checked }))}
+                />
               </div>
-              <Switch
-                checked={config.stream_mode ?? false}
-                onCheckedChange={(checked) => setConfig((p) => ({ ...p, stream_mode: checked }))}
-              />
-            </div>
+            )}
           </>
         )}
 

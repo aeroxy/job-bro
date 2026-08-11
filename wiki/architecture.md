@@ -51,6 +51,12 @@ User → Job Page (LinkedIn / Greenhouse)
          │     tool calls → service worker fetch
          │                  → PARSE_HTML → offscreen (DOMParser + Turndown)
          │
+         ├── backend === 'anthropic' ───────────────────
+         │     SSE fetch {base_url}/messages (API, gateway, or claude-proxy)
+         │     anthropic-messages.ts translates the wire format both ways
+         │     x-claude-code-session-id pins the prompt cache per job
+         │     tool calls → same service worker fetch → PARSE_HTML path
+         │
          ├── backend === 'chrome-prompt' ──────────────
          │     chrome-ai-client → chrome.runtime.sendMessage → offscreen
          │     offscreen FIFO queue → LanguageModel.create / .prompt (Gemini Nano)
