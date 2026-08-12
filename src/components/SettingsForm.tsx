@@ -622,7 +622,9 @@ export function SettingsForm({
                     className="text-xs"
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    Leave blank to use the provider default
+                    {isAnthropic
+                      ? 'Leave blank — Opus 5, Sonnet 5 and Opus 4.7+ reject an explicit temperature outright (400).'
+                      : 'Leave blank to use the provider default'}
                   </p>
                 </div>
               </div>
@@ -658,7 +660,7 @@ export function SettingsForm({
                   so the model can&rsquo;t drift shape. Eliminates the &ldquo;fix your JSON&rdquo; retry
                   path.{' '}
                   {isAnthropic
-                    ? 'Needs a Claude model (and proxy) that supports structured outputs — Opus 4.8+, Sonnet 5, Haiku 4.5.'
+                    ? 'Needs a Claude model (and proxy) that supports structured outputs — Opus 5 / 4.8, Sonnet 5 and Haiku 4.5 do today, but the list drifts, so check Anthropic’s docs if a model rejects it.'
                     : 'Requires a provider that supports the OpenAI json_schema format (OpenAI, Groq, Together, Fireworks, vLLM). Disable for local servers that silently ignore unknown response_format fields.'}
                 </p>
               </div>

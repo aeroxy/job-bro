@@ -32,6 +32,11 @@ export interface AnthropicResponse {
     id?: string
     name?: string
     input?: Record<string, unknown>
+    // thinking / redacted_thinking. We never read these — they exist so the
+    // blocks can be echoed back verbatim; see `readAnthropicResponse`.
+    thinking?: string
+    signature?: string
+    data?: string
   }>
   stop_reason?: string | null
   stop_details?: { category?: string | null; explanation?: string | null } | null
@@ -55,6 +60,10 @@ export interface AnthropicReadResult {
   stopReason?: string | null
   // Category / explanation from `stop_details`, when the request was declined.
   refusalDetail?: string
+  // `thinking` / `redacted_thinking` blocks, verbatim and in order. Opaque —
+  // nothing reads their contents; they exist only to be handed back on the next
+  // turn. See `readAnthropicResponse` for why that is mandatory.
+  reasoning_blocks?: unknown[]
 }
 
 // Our flat ChatMessage list → Anthropic's `system` + `messages`.
@@ -86,10 +95,16 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
     }
 
     if (message.role === 'tool') {
+      // An empty tool_use_id is a 400 with no useful body. Name it here — the
+      // agent loop always carries the id, so hitting this means a caller built
+      // the transcript by hand and lost the pairing.
+      if (!message.tool_call_id) {
+        throw new Error('Anthropic: a tool result is missing its tool_call_id, so it cannot be paired with a tool_use block.')
+      }
       append('user', [
         {
           type: 'tool_result',
-          tool_use_id: message.tool_call_id ?? '',
+          tool_use_id: message.tool_call_id,
           // An empty block is rejected, and "no output" is itself the result.
           content: message.content || '(no output)',
         },
@@ -98,11 +113,36 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
     }
 
     const blocks: RequestBlock[] = []
+    // Reasoning first: Anthropic requires a turn's thinking blocks to lead it,
+    // ahead of any text or tool_use. Cast because they are opaque passthrough —
+    // we hand back exactly what the model sent.
+    if (message.reasoning_blocks?.length) {
+      blocks.push(...(message.reasoning_blocks as RequestBlock[]))
+    }
     if (message.content.trim()) blocks.push({ type: 'text', text: message.content })
     for (const call of message.tool_calls ?? []) {
       blocks.push({ type: 'tool_use', id: call.id, name: call.function.name, input: asObject(call.function.arguments) })
     }
     append(message.role, blocks)
+  }
+
+  // `system` is a separate field here, so a prompt built only from system turns
+  // converts to an empty `messages` array — which the API rejects as flatly as
+  // it would a missing model, and just as opaquely.
+  if (!out.length) {
+    throw new Error('Anthropic: a request needs at least one user or assistant message, but only system turns were given.')
+  }
+
+  // Anthropic reads a *trailing* assistant turn as a prefill and rejects one
+  // whose last text block ends in whitespace. No current caller ends the array
+  // on an assistant turn — the agent loop always appends a tool result or a
+  // user nudge — but this is a general translator, so normalise the single spot
+  // the API is strict about rather than trimming every assistant turn (which
+  // would silently edit mid-conversation history the model already produced).
+  const tail = out[out.length - 1]
+  if (tail?.role === 'assistant') {
+    const last = tail.content[tail.content.length - 1]
+    if (last?.type === 'text') last.text = last.text.trimEnd()
   }
 
   return { system: system.length ? system.join('\n\n') : undefined, messages: out }
@@ -175,6 +215,24 @@ export function readAnthropicResponse(data: AnthropicResponse): AnthropicReadRes
       function: { name: block.name ?? '', arguments: JSON.stringify(block.input ?? {}) },
     }))
 
+  // Thinking blocks have to survive the round trip. When thinking is on — and
+  // on Claude Opus 5 it is on by default, with no `thinking` field sent — the
+  // API requires the assistant turn that made a tool call to still carry its
+  // thinking blocks, unchanged, when the matching tool_result comes back;
+  // dropping them fails the next request on ordering/signature grounds. So the
+  // agent loop can't just keep text and tool_calls, which is all it needs
+  // itself: it has to carry these along too.
+  //
+  // An unsigned thinking block is rejected in its own right, so one that
+  // reached us without a signature (a proxy that strips it, say) is dropped
+  // rather than echoed — that reproduces the old behaviour instead of
+  // guaranteeing a 400.
+  const reasoning = blocks.filter(
+    (block) =>
+      (block.type === 'thinking' && block.signature) ||
+      (block.type === 'redacted_thinking' && block.data)
+  )
+
   const detail = [data.stop_details?.category, data.stop_details?.explanation]
     .filter((part): part is string => !!part)
     .join(': ')
@@ -184,6 +242,7 @@ export function readAnthropicResponse(data: AnthropicResponse): AnthropicReadRes
     tool_calls: tool_calls.length ? tool_calls : undefined,
     stopReason: data.stop_reason,
     refusalDetail: detail || undefined,
+    reasoning_blocks: reasoning.length ? reasoning : undefined,
   }
 }
 
@@ -202,6 +261,10 @@ function asObject(json: string): Record<string, unknown> {
   } catch {
     /* fall through */
   }
+  // Silent `{}` is the right wire behaviour but a miserable thing to debug —
+  // the tool then fails on its own "requires a non-empty query" error, which
+  // reads like a model mistake rather than truncated/mangled JSON.
+  console.warn('[anthropic] discarded malformed tool-call arguments:', json.slice(0, 200))
   return {}
 }
 
@@ -213,11 +276,12 @@ function asObject(json: string): Record<string, unknown> {
 export interface AnthropicStreamEvent {
   type?: string
   index?: number
-  content_block?: { type?: string; id?: string; name?: string }
+  content_block?: { type?: string; id?: string; name?: string; data?: string }
   delta?: {
     type?: string
     text?: string
     thinking?: string
+    signature?: string
     partial_json?: string
     stop_reason?: string | null
     stop_details?: AnthropicResponse['stop_details']
@@ -233,6 +297,10 @@ interface StreamBlock {
   text: string
   // `input_json_delta` fragments for a tool_use block, concatenated.
   json: string
+  // A thinking block's signature, and a redacted_thinking block's payload. Both
+  // are opaque and both must be echoed back verbatim — hence captured, not read.
+  signature?: string
+  data?: string
 }
 
 export interface AnthropicStreamState {
@@ -260,6 +328,8 @@ export function applyAnthropicStreamEvent(
         type: event.content_block?.type ?? 'text',
         id: event.content_block?.id,
         name: event.content_block?.name,
+        // redacted_thinking carries its whole payload on the start event.
+        data: event.content_block?.data,
         text: '',
         json: '',
       }
@@ -279,8 +349,13 @@ export function applyAnthropicStreamEvent(
         case 'input_json_delta':
           block.json += event.delta.partial_json ?? ''
           return
+        case 'signature_delta':
+          // Never read, but a thinking block is invalid without it, so it has to
+          // be kept for the echo back — see `readAnthropicResponse`.
+          block.signature = (block.signature ?? '') + (event.delta.signature ?? '')
+          return
         default:
-          // signature_delta and anything newer: nothing for us to accumulate.
+          // Anything newer: nothing for us to accumulate.
           return
       }
     }
@@ -300,13 +375,20 @@ export function applyAnthropicStreamEvent(
 // has, so `readAnthropicResponse` stays the only place that interprets a reply.
 export function finishAnthropicStream(state: AnthropicStreamState): AnthropicResponse {
   return {
-    content: state.blocks.filter(Boolean).map((block) =>
-      block.type === 'tool_use'
-        ? { type: block.type, id: block.id, name: block.name, input: asObject(block.json) }
-        : // Non-text types (thinking, redacted_thinking) pass through here too;
-          // readAnthropicResponse only reads `text` and `tool_use` blocks.
-          { type: block.type, text: block.text }
-    ),
+    content: state.blocks.filter(Boolean).map((block) => {
+      switch (block.type) {
+        case 'tool_use':
+          return { type: block.type, id: block.id, name: block.name, input: asObject(block.json) }
+        // Rebuilt in the API's own shape rather than ours, because these two get
+        // handed straight back on the next turn.
+        case 'thinking':
+          return { type: block.type, thinking: block.text, signature: block.signature }
+        case 'redacted_thinking':
+          return { type: block.type, data: block.data }
+        default:
+          return { type: block.type, text: block.text }
+      }
+    }),
     stop_reason: state.stopReason,
     stop_details: state.stopDetails,
   }

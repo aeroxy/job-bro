@@ -21,6 +21,15 @@ export interface ChatMessage {
   content: string
   tool_call_id?: string
   tool_calls?: ToolCall[]
+  /**
+   * Anthropic only: the `thinking` / `redacted_thinking` blocks this assistant
+   * turn came back with, kept verbatim so they can be replayed on the next
+   * request — the API rejects a tool_result whose assistant turn lost them, and
+   * Claude Opus 5 thinks by default. Opaque here; only `anthropic-messages.ts`
+   * produces or consumes them. Left `undefined` on every other backend, so
+   * `JSON.stringify` omits it and nothing extra reaches an OpenAI endpoint.
+   */
+  reasoning_blocks?: unknown[]
 }
 
 interface ChatCompletionResponse {
@@ -703,7 +712,7 @@ async function anthropicRequest(
     }
   )
 
-  const { content, tool_calls, stopReason, refusalDetail } = readAnthropicResponse(
+  const { content, tool_calls, stopReason, refusalDetail, reasoning_blocks } = readAnthropicResponse(
     finishAnthropicStream(state)
   )
   if (stopReason === 'refusal') {
@@ -715,8 +724,30 @@ async function anthropicRequest(
     if (stopReason === 'max_tokens') throw new Error(truncatedMessage(bodyOptions.max_tokens))
     throw new Error('LLM returned empty response')
   }
-  return { content: text, tool_calls }
+  return { content: text, tool_calls, reasoning_blocks }
 }
+
+// Anthropic reports failures as `{"type":"error","error":{"type","message"}}`.
+// Unwrapped, the whole envelope lands in the sidepanel's error card and buries
+// the one useful sentence — which matters most for the 400s a user can actually
+// cause (an explicit temperature, an unsupported output_config). Falls back to
+// the raw body, since a gateway or proxy may answer with HTML instead.
+function anthropicErrorText(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: { type?: string; message?: string } }
+    const message = parsed.error?.message
+    if (message) return parsed.error?.type ? `${parsed.error.type}: ${message}` : message
+  } catch {
+    /* not JSON */
+  }
+  return body
+}
+
+// The only events that mutate `AnthropicStreamState`. Anthropic opens every
+// stream with `message_start` and interleaves `ping`s, so counting those as
+// "delivered" armed postSSE's replay guard on the first event of essentially
+// every call — silently costing the Anthropic path its transient-network retry.
+const STATE_MUTATING_EVENTS = new Set(['content_block_start', 'content_block_delta', 'message_delta'])
 
 interface PostSSEOptions {
   headers: Record<string, string>
@@ -757,7 +788,7 @@ async function postSSE(
       })
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error')
+        const errorText = anthropicErrorText(await response.text().catch(() => 'Unknown error'))
         const retryable = isRetryableStatus(response.status)
         if (retryable && attempt < HTTP_RETRY_DELAYS.length) {
           lastError = new Error(`HTTP ${response.status}: ${errorText}`)
@@ -776,10 +807,11 @@ async function postSSE(
       const emit = (block: string) => {
         const event = parseSSEBlock(block)
         if (!event) return
-        // `delivered` is set after the handler returns, so an `error` event
-        // arriving first still throws from a retryable position.
+        // Set after the handler returns, and only for state-mutating events, so
+        // an `error` event — or a stream that dropped after nothing but pings —
+        // still throws from a retryable position.
         onEvent(event)
-        delivered = true
+        if (event.type && STATE_MUTATING_EVENTS.has(event.type)) delivered = true
       }
       // Events are separated by a blank line; the regex tolerates CRLF.
       const drain = () => {

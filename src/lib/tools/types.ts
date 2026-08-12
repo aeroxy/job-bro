@@ -38,6 +38,9 @@ export interface ToolCall {
 export interface ChatCompletionWithToolsResult {
   content: string
   tool_calls?: ToolCall[]
+  // Anthropic only: opaque thinking blocks the agent loop must carry back into
+  // the transcript. See `ChatMessage.reasoning_blocks` in lib/llm-client.ts.
+  reasoning_blocks?: unknown[]
 }
 
 export interface ToolHandlerContext {
