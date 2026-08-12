@@ -460,9 +460,9 @@ export function SettingsForm({
                     Claude Messages API — the Anthropic API itself, a gateway, or a local{' '}
                     <a href="https://github.com/aeroxy/claude-proxy" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">claude-proxy</a>.
                     The key goes out as <code className="text-[10px]">x-api-key</code>, and each job gets
-                    a stable <code className="text-[10px]">x-claude-code-session-id</code> so prompt-cache
-                    entries survive across its evaluators, resume and chat. Always streams, so
-                    &ldquo;Stream Timeout&rdquo; is the one that applies.
+                    a stable <code className="text-[10px]">x-claude-code-session-id</code> so a proxy&rsquo;s
+                    prompt cache is readable across a run&rsquo;s turns instead of being rewritten every
+                    call. Always streams, so &ldquo;Stream Timeout&rdquo; is the one that applies.
                   </p>
                 )}
               </div>
@@ -752,6 +752,10 @@ function BackendOption({ icon, label, description, selected, disabled, onClick }
   return (
     <button
       type="button"
+      // These render as buttons, not radios, so the selected state has to be
+      // announced explicitly — otherwise the active backend / API format is
+      // conveyed by border colour alone.
+      aria-pressed={selected}
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       className={[

@@ -25,10 +25,14 @@ Options:
 
 **Truncation handling:** when the response has `finish_reason: 'length'` and no usable output (empty content, no tool_calls), the client throws an actionable error ("Raise Max Tokens in settings") instead of returning `''` and tripping a downstream JSON parse error. Applies to all three paths (non-stream, tools, stream).
 
-**Retry behavior:**
-- HTTP 429 / 5xx: retries with delays `[1000ms, 3000ms]`
-- Network/abort errors: not retried
-- Timeout: 30 seconds (AbortController)
+**Retry behavior:** one policy, shared by all four HTTP loops (non-stream, stream, tools, Anthropic SSE) via the module-level `HTTP_RETRY_DELAYS` / `RETRYABLE_STATUS` / `isRetryableStatus`.
+- HTTP 429 / 500 / 502 / 503 / 504: retried with delays `[3s, 10s]` — 3 attempts total.
+- Transient network errors (`fetch` `TypeError`, our own `TimeoutError`): retried on the same schedule. A **user abort** (`signal.aborted`) and the `Error`s this module throws itself are not.
+- **Anthropic only:** a failure is additionally only retried while no SSE event has been delivered yet — see `postSSE` below.
+
+**Timeouts** differ per transport:
+- Non-streaming (`openai`): `config.timeout ?? 30` s, total, per attempt.
+- Streaming (`openai` with `stream_mode`, and always on `anthropic`): `config.stream_timeout ?? 60` s of **inactivity between chunks**, rearmed on every chunk, so a long think doesn't trip it. `config.timeout` is unused on those paths.
 
 **Custom headers:** `config.custom_headers` is parsed as JSON and merged into request headers.
 
@@ -223,9 +227,13 @@ Each loads `profile`, `llmConfig`, and `customPrompt` from `chrome.storage.local
 
 **Anthropic session id.** On the `'anthropic'` backend, `loadConfigAndProfile(sessionSeed)` stamps a runtime-only `config.session_id` (never written back to storage) that `anthropicRequest` sends as `x-claude-code-session-id`. It rides on the config because that's the one object already threaded through the runner, every evaluator and the agent loop.
 
-`sessionIdFor(seed)` is a SHA-256 of the seed formatted as a UUID (v8 — the "custom" version, with the RFC 4122 variant bits set), so it is **deterministic**: re-analysing, generating a resume for, and chatting about the same posting land in one session. `runAnalysis` / `runResume` seed from `job.url || job.job_id || "title|company"`; `runChat` only receives the rendered JD, so it seeds from that — stable across a conversation's turns, but a different partition from the analysis run.
+`sessionIdFor(seed)` is a SHA-256 of the seed formatted as a UUID (v8 — the "custom" version, with the RFC 4122 variant bits set), so it is **deterministic**: the same posting always yields the same id, including across re-runs days apart.
 
-Why it matters: prompt-cache entries are partitioned by session, and a churning id means every request writes a fresh entry and reads nothing. claude-proxy derives an id from the first user message when the client sends no header — and that message is our whole JD, so the derived id changed on every call and a byte-identical system block was read zero times. Sending our own short-circuits the derivation. `api.anthropic.com` ignores the header.
+`jobSeed(job)` supplies it for `runAnalysis` / `runResume`, and deliberately does **not** use the raw URL: LinkedIn hangs volatile tracking params (`eBP`, `refId`, `trackingId`) off it, so the same posting opened twice would seed two sessions. It uses `job.job_id`, falling back to `extractJobId(job.url)` — the codebase's canonical site-namespaced identity, the same one history and tab matching key on, which reads the id out of either `/jobs/view/<id>` or `?currentJobId=` — then the raw URL, then `"title|company"`.
+
+`runChat` only receives the rendered JD, so it seeds from that: stable across a conversation's turns, but a **different partition** from the analysis run. That costs nothing, because a shared id would not produce cross-mode hits anyway — the cache is keyed on the prompt prefix, and chat's system block (advisor role + report) shares no prefix with an evaluator's or the resume generator's.
+
+Why it matters at all: cache entries are partitioned by session, so a *churning* id means every request writes a fresh entry and reads nothing. claude-proxy derives an id from the first user message when the client sends no header — and that message is our whole JD, so the derived id changed on every call and a byte-identical system block was read zero times. What a stable id buys is reuse across the calls that *do* share a prefix: an evaluator's agent-loop turns and its validation retry, and a later re-analysis of the same posting. `api.anthropic.com` ignores the header.
 
 ---
 

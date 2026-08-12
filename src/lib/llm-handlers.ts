@@ -5,6 +5,7 @@
 import { runResumeGenerator } from '@/evaluators/resume'
 import { runAllEvaluators } from '@/evaluators/runner'
 import { jobToMarkdown } from '@/extractor/markdown'
+import { extractJobId } from '@/extractor/site'
 import { SYSTEM_PROMPT_SEPARATOR } from '@/lib/chrome-ai-client'
 import { chatCompletion } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
@@ -89,10 +90,16 @@ async function loadConfigAndProfile(
   return { ok: true, profile, config, customPrompt: customPrompt.trim() }
 }
 
-// The stable part of a posting's identity — the URL when we have one, else
-// whatever else pins it down.
+// The stable part of a posting's identity. The raw URL is a poor seed —
+// LinkedIn hangs volatile tracking params off it (`eBP`, `refId`,
+// `trackingId`), so the same posting opened twice would seed two sessions and
+// lose the cache reuse this exists for. `job_id` / `extractJobId` are the
+// codebase's canonical, site-namespaced identity (the same one history and tab
+// matching key on), and they read LinkedIn's id out of either `/jobs/view/<id>`
+// or `?currentJobId=` — so a query string can't shift the seed, and two
+// different jobs sharing a collections path can't collide onto one.
 function jobSeed(job: ExtractedJob): string {
-  return job.url || job.job_id || `${job.title}|${job.company}`
+  return job.job_id || extractJobId(job.url) || job.url || `${job.title}|${job.company}`
 }
 
 export async function runAnalysis(
