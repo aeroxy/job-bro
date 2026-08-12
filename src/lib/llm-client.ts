@@ -37,6 +37,16 @@ interface ChatCompletionResponse {
 // with finish_reason 'length'. Overridable per-provider via config.max_tokens.
 const DEFAULT_MAX_TOKENS = 8192
 
+// One retry policy for every HTTP path (non-stream, stream, tools, Anthropic
+// SSE). Delays are indexed by attempt, so the array length is also the retry
+// budget: `attempt <= HTTP_RETRY_DELAYS.length` gives 3 tries total.
+const HTTP_RETRY_DELAYS = [3000, 10000]
+const RETRYABLE_STATUS = [429, 500, 502, 503, 504]
+
+function isRetryableStatus(status: number): boolean {
+  return RETRYABLE_STATUS.includes(status)
+}
+
 // Shared error for a length-truncated response that produced no usable output —
 // almost always a reasoning model exhausting max_tokens on reasoning_content.
 function truncatedMessage(maxTokens: number): string {
@@ -288,9 +298,8 @@ export async function chatCompletion(
     const url = `${baseUrl}/chat/completions`
 
     let lastError: Error | null = null
-    const httpRetryDelays = [3000, 10000]
 
-    for (let attempt = 0; attempt <= 2; attempt++) {
+    for (let attempt = 0; attempt <= HTTP_RETRY_DELAYS.length; attempt++) {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), timeoutMs)
 
@@ -320,11 +329,11 @@ export async function chatCompletion(
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => 'Unknown error')
-          const retryable = [429, 500, 502, 503, 504].includes(response.status)
+          const retryable = isRetryableStatus(response.status)
 
-          if (retryable && attempt < 2) {
+          if (retryable && attempt < HTTP_RETRY_DELAYS.length) {
             lastError = new Error(`HTTP ${response.status}: ${errorText}`)
-            await delay(httpRetryDelays[attempt])
+            await delay(HTTP_RETRY_DELAYS[attempt])
             continue
           }
 
@@ -342,9 +351,9 @@ export async function chatCompletion(
         return stripThinkBlock(content)
       } catch (e) {
         clearTimeout(timeout)
-        if (isTransientNetworkError(e, signal) && attempt < 2) {
+        if (isTransientNetworkError(e, signal) && attempt < HTTP_RETRY_DELAYS.length) {
           lastError = e instanceof Error ? e : new Error(String(e))
-          await delay(httpRetryDelays[attempt])
+          await delay(HTTP_RETRY_DELAYS[attempt])
           continue
         }
         throw e instanceof Error ? e : new Error(String(e))
@@ -452,9 +461,8 @@ async function streamCompletion(
   const url = `${baseUrl}/chat/completions`
 
   let lastError: Error | null = null
-  const httpRetryDelays = [3000, 10000]
 
-  for (let attempt = 0; attempt <= 2; attempt++) {
+  for (let attempt = 0; attempt <= HTTP_RETRY_DELAYS.length; attempt++) {
     const controller = new AbortController()
     let inactivityTimer: ReturnType<typeof setTimeout>
     const resetTimer = () => {
@@ -488,11 +496,11 @@ async function streamCompletion(
       if (!response.ok) {
         clearTimeout(inactivityTimer!)
         const errorText = await response.text().catch(() => 'Unknown error')
-        const retryable = [429, 500, 502, 503, 504].includes(response.status)
+        const retryable = isRetryableStatus(response.status)
 
-        if (retryable && attempt < 2) {
+        if (retryable && attempt < HTTP_RETRY_DELAYS.length) {
           lastError = new Error(`HTTP ${response.status}: ${errorText}`)
-          await delay(httpRetryDelays[attempt])
+          await delay(HTTP_RETRY_DELAYS[attempt])
           continue
         }
 
@@ -552,9 +560,9 @@ async function streamCompletion(
 
     } catch (e) {
       clearTimeout(inactivityTimer!)
-      if (isTransientNetworkError(e, signal) && attempt < 2) {
+      if (isTransientNetworkError(e, signal) && attempt < HTTP_RETRY_DELAYS.length) {
         lastError = e instanceof Error ? e : new Error(String(e))
-        await delay(httpRetryDelays[attempt])
+        await delay(HTTP_RETRY_DELAYS[attempt])
         continue
       }
       throw e instanceof Error ? e : new Error(String(e))
@@ -728,10 +736,9 @@ async function postSSE(
   onEvent: (event: AnthropicStreamEvent) => void
 ): Promise<void> {
   const { headers, body, idleMs, signal } = options
-  const httpRetryDelays = [3000, 10000]
   let lastError: Error | null = null
 
-  for (let attempt = 0; attempt <= 2; attempt++) {
+  for (let attempt = 0; attempt <= HTTP_RETRY_DELAYS.length; attempt++) {
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const rearm = () => {
@@ -751,11 +758,11 @@ async function postSSE(
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error')
-        const retryable = [429, 500, 502, 503, 504].includes(response.status)
-        if (retryable && attempt < 2) {
+        const retryable = isRetryableStatus(response.status)
+        if (retryable && attempt < HTTP_RETRY_DELAYS.length) {
           lastError = new Error(`HTTP ${response.status}: ${errorText}`)
           clearTimeout(timer)
-          await delay(httpRetryDelays[attempt])
+          await delay(HTTP_RETRY_DELAYS[attempt])
           continue
         }
         throw new Error(`LLM API error (${response.status}): ${errorText}`)
@@ -809,9 +816,9 @@ async function postSSE(
       return
     } catch (e) {
       clearTimeout(timer)
-      if (!delivered && isTransientNetworkError(e, signal) && attempt < 2) {
+      if (!delivered && isTransientNetworkError(e, signal) && attempt < HTTP_RETRY_DELAYS.length) {
         lastError = e instanceof Error ? e : new Error(String(e))
-        await delay(httpRetryDelays[attempt])
+        await delay(HTTP_RETRY_DELAYS[attempt])
         continue
       }
       throw e instanceof Error ? e : new Error(String(e))
@@ -897,10 +904,9 @@ async function toolCompletionRequest(
   if (!baseUrl) throw new Error('LLM base URL is not configured')
   const url = `${baseUrl}/chat/completions`
 
-  const httpRetryDelays = [3000, 10000]
   let lastError: Error | null = null
 
-  for (let attempt = 0; attempt <= 2; attempt++) {
+  for (let attempt = 0; attempt <= HTTP_RETRY_DELAYS.length; attempt++) {
     const controller = new AbortController()
     const timer = setTimeout(
       () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
@@ -929,10 +935,10 @@ async function toolCompletionRequest(
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error')
-        const retryable = [429, 500, 502, 503, 504].includes(response.status)
-        if (retryable && attempt < 2) {
+        const retryable = isRetryableStatus(response.status)
+        if (retryable && attempt < HTTP_RETRY_DELAYS.length) {
           lastError = new Error(`HTTP ${response.status}: ${errorText}`)
-          await delay(httpRetryDelays[attempt])
+          await delay(HTTP_RETRY_DELAYS[attempt])
           continue
         }
         throw new Error(`LLM API error (${response.status}): ${errorText}`)
@@ -957,9 +963,9 @@ async function toolCompletionRequest(
       }
     } catch (e) {
       clearTimeout(timer)
-      if (isTransientNetworkError(e, signal) && attempt < 2) {
+      if (isTransientNetworkError(e, signal) && attempt < HTTP_RETRY_DELAYS.length) {
         lastError = e instanceof Error ? e : new Error(String(e))
-        await delay(httpRetryDelays[attempt])
+        await delay(HTTP_RETRY_DELAYS[attempt])
         continue
       }
       throw e instanceof Error ? e : new Error(String(e))

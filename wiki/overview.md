@@ -5,7 +5,7 @@
 ## What It Does
 
 1. **Extracts** job descriptions directly from LinkedIn and Greenhouse job posting pages
-2. **Analyzes** them across 5 dimensions using an OpenAI-compatible LLM
+2. **Analyzes** them across 5 dimensions using the configured LLM backend
 3. **Returns a verdict** — Strong Apply, Maybe, or Skip — with a scored report
 4. **Generates tailored resumes** for a specific job, with iterative feedback
 5. **Persists history** of all past analyses in IndexedDB
