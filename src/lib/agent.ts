@@ -187,6 +187,9 @@ export async function runAgent(
           role: 'assistant',
           content: response.content,
           tool_calls: [verdictCall],
+          // Anthropic requires a tool-calling turn to keep its thinking blocks
+          // when the tool_result comes back; undefined on every other backend.
+          reasoning_blocks: response.reasoning_blocks,
         } as ChatMessage)
         return { content: verdictCall.function.arguments, messages: working }
       }
@@ -210,6 +213,9 @@ export async function runAgent(
       role: 'assistant',
       content: response.content,
       tool_calls: response.tool_calls,
+      // See the verdict push above — the thinking blocks have to ride along with
+      // the tool_use they belong to, or the next request is rejected.
+      reasoning_blocks: response.reasoning_blocks,
     } as ChatMessage)
 
     // Tool calls in a single turn are independent network requests — run them
