@@ -623,7 +623,7 @@ export function SettingsForm({
                   />
                   <p className="text-[10px] text-muted-foreground">
                     {isAnthropic
-                      ? 'Leave blank — Opus 5, Sonnet 5 and Opus 4.7+ reject an explicit temperature outright (400).'
+                      ? 'Leave blank — Claude Opus 4.7+ and Sonnet 5 reject a non-default temperature (400), as does any model with thinking on (Opus 5 has it on by default).'
                       : 'Leave blank to use the provider default'}
                   </p>
                 </div>

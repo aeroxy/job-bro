@@ -30,7 +30,7 @@ job-bro/
 
 ## Process Model
 
-The service worker is the **single LLM orchestrator**. Both backends route through it; the offscreen document hosts the bits that need a window context.
+The service worker is the **router**, not the orchestrator: it relays analysis and resume to the **offscreen document**, which runs the pipeline end to end without service-worker lifetime limits, and handles chat itself. The offscreen also hosts the bits needing a window context (DOM parsing, Chrome's `LanguageModel`) and bridges Qwen fetches back to the background, which owns `chrome.cookies`. On the `chrome-prompt` backend the sidepanel runs the pipeline locally instead.
 
 ```
 User → Job Page (LinkedIn / Greenhouse)
@@ -42,8 +42,8 @@ User → Job Page (LinkedIn / Greenhouse)
     Background Service Worker
          │
          ▼ (returns ExtractedJob to sidepanel)
-    Sidepanel → ANALYZE_JD → Background
-     Background runs llm-handlers.runAnalysis (Promise.all)
+    Sidepanel → ANALYZE_JD → Background → OFFSCREEN_ANALYZE_JD → Offscreen
+     Offscreen runs llm-handlers.runAnalysis (staged pipeline)
      5 evaluators → agent loop → tool calls / structured-output channel / chat
          │
          ├── backend === 'openai' ──────────────────────
@@ -164,6 +164,7 @@ with `chrome.offscreen.Reason.DOM_PARSER`. All Chrome AI work serializes
 through one FIFO inside the offscreen — Gemini Nano is one in-process
 model, and the offscreen's `onMessage` listeners fire in parallel.
 
-The shared orchestrator (`llm-handlers.ts`) runs in the service worker.
-The Chrome backend goes through `chrome-ai-client`, which messages the
-offscreen — no per-context code duplication.
+The shared orchestrator (`llm-handlers.ts`) is realm-agnostic — the same code
+runs in the offscreen (analysis/resume), the service worker (chat), or the
+sidepanel (`chrome-prompt`). The Chrome backend goes through
+`chrome-ai-client`, which messages the offscreen — no per-context duplication.
