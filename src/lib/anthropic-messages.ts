@@ -16,8 +16,8 @@ const EPHEMERAL = { type: 'ephemeral' } as const
 
 type RequestBlock =
   | { type: 'text'; text: string; cache_control?: typeof EPHEMERAL }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; cache_control?: typeof EPHEMERAL }
+  | { type: 'tool_result'; tool_use_id: string; content: string; cache_control?: typeof EPHEMERAL }
 
 interface RequestMessage {
   role: 'user' | 'assistant'
@@ -173,6 +173,22 @@ export function buildAnthropicBody(
   // (Opus 5, Sonnet 5, Opus 4.7+) reject an explicit temperature outright, and
   // any model rejects one alongside thinking — which Opus 5 has on by default.
   if (options.temperature !== undefined) body.temperature = options.temperature
+
+  // Second breakpoint, on the last block of the last turn — the multi-turn
+  // pattern. The system entry alone only covers tools + system, so an agent
+  // loop re-sent the JD, the previous assistant turn and every tool_result at
+  // full price on each iteration. Measured on a real capture: a second turn
+  // read 1,516 tokens and paid for 8,391, most of it a page dump it had
+  // already sent. Cheap to place — reads accrue incrementally as the
+  // conversation grows, and each turn adds far fewer than the 20 blocks a
+  // breakpoint looks back over.
+  const lastTurn = converted[converted.length - 1]
+  const lastBlock = lastTurn?.content[lastTurn.content.length - 1]
+  // Thinking blocks are replayed verbatim and take no cache_control, so skip
+  // anything that isn't one of the three block types that accept it.
+  if (lastBlock && (lastBlock.type === 'text' || lastBlock.type === 'tool_result' || lastBlock.type === 'tool_use')) {
+    lastBlock.cache_control = EPHEMERAL
+  }
 
   if (options.stream) body.stream = true
 

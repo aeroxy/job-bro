@@ -5,11 +5,10 @@
 import { runResumeGenerator } from '@/evaluators/resume'
 import { runAllEvaluators } from '@/evaluators/runner'
 import { jobToMarkdown } from '@/extractor/markdown'
-import { extractJobId } from '@/extractor/site'
 import { SYSTEM_PROMPT_SEPARATOR } from '@/lib/chrome-ai-client'
 import { chatCompletion } from '@/lib/llm-client'
 import type { ChatMessage } from '@/lib/llm-client'
-import { getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
+import { getActiveProfileId, getCustomPrompt, getLLMConfig, getProfile } from '@/lib/storage'
 import type { AggregatedReport } from '@/types/evaluation'
 import type { ExtractedJob } from '@/types/job'
 import type { ChatTurn } from '@/types/chat'
@@ -37,16 +36,19 @@ export type ToolCallCallback = (evaluator: string, call: ToolCall) => void
 export type EvaluatorResultCallback = (evaluator: string, result: unknown) => void
 
 // A stable conversation identity, sent as `x-claude-code-session-id` on the
-// Anthropic path (see `anthropicRequest` in lib/llm-client.ts). Derived from the
-// job rather than random, so re-analysing, generating a resume for, and chatting
-// about the same posting all land in one session.
+// Anthropic path (see `anthropicRequest` in lib/llm-client.ts).
 //
-// It exists because prompt cache entries are partitioned by session, and a
-// session id that churns means every request writes a fresh entry and reads
-// nothing. claude-proxy (github.com/aeroxy/claude-proxy) derives one from the
-// first user message when the client doesn't send this header, and that message
-// is our whole JD — so the derived id changed on every call and a byte-identical
-// system block was read zero times. Sending our own short-circuits that.
+// Scoped to the **LLM profile**, not the job. Cache entries are partitioned by
+// session, and each evaluator's system block is job-independent — the JD lives
+// in a user turn, so `job_fit` sends byte-identical tools+system for every
+// posting. Measured on a real capture, that block is ~21k tokens; a per-job
+// session put every posting in its own partition, so it could never be read
+// back. One partition per profile lets the second posting analysed inside the
+// TTL read it instead of rewriting it.
+//
+// A stable id is also what stops claude-proxy deriving one from the first user
+// message: that message is our whole JD, so the derived id changed on every
+// call and even a repeated system block was read zero times.
 //
 // Shaped as a UUID (v8, the "custom" version) because that's what the header
 // carries in Claude Code itself; proxies that validate the format accept it.
@@ -58,10 +60,7 @@ async function sessionIdFor(seed: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }
 
-async function loadConfigAndProfile(
-  // Seed for the Anthropic session id above. Omit for backends that ignore it.
-  sessionSeed?: string,
-): Promise<
+async function loadConfigAndProfile(): Promise<
   | { ok: true; profile: UserProfile; config: NonNullable<Awaited<ReturnType<typeof getLLMConfig>>>; customPrompt: string }
   | { ok: false; error: string }
 > {
@@ -82,24 +81,12 @@ async function loadConfigAndProfile(
   // Stamped on the config rather than threaded as an option: config is already
   // passed to the runner, every evaluator and the agent loop. Runtime-only —
   // nothing writes this back to storage.
-  if (backend === 'anthropic' && sessionSeed) {
-    config = { ...config, session_id: await sessionIdFor(sessionSeed) }
+  if (backend === 'anthropic') {
+    config = { ...config, session_id: await sessionIdFor(`profile:${(await getActiveProfileId()) ?? 'default'}`) }
   }
 
   const customPrompt = await getCustomPrompt(config.backend)
   return { ok: true, profile, config, customPrompt: customPrompt.trim() }
-}
-
-// The stable part of a posting's identity. The raw URL is a poor seed —
-// LinkedIn hangs volatile tracking params off it (`eBP`, `refId`,
-// `trackingId`), so the same posting opened twice would seed two sessions and
-// lose the cache reuse this exists for. `job_id` / `extractJobId` are the
-// codebase's canonical, site-namespaced identity (the same one history and tab
-// matching key on), and they read LinkedIn's id out of either `/jobs/view/<id>`
-// or `?currentJobId=` — so a query string can't shift the seed, and two
-// different jobs sharing a collections path can't collide onto one.
-function jobSeed(job: ExtractedJob): string {
-  return job.job_id || extractJobId(job.url) || job.url || `${job.title}|${job.company}`
 }
 
 export async function runAnalysis(
@@ -111,7 +98,7 @@ export async function runAnalysis(
   // Resume: fulfilled results from a prior run to reuse instead of re-running.
   priorResults?: Partial<AggregatedReport['evaluators']>,
 ): Promise<AnalyzeResult> {
-  const loaded = await loadConfigAndProfile(jobSeed(job))
+  const loaded = await loadConfigAndProfile()
   if (!loaded.ok) return loaded
 
   try {
@@ -141,7 +128,7 @@ export async function runResume(
   qnaHistory?: ChatTurn[],
   signal?: AbortSignal,
 ): Promise<ResumeResult> {
-  const loaded = await loadConfigAndProfile(jobSeed(job))
+  const loaded = await loadConfigAndProfile()
   if (!loaded.ok) return loaded
 
   try {
@@ -222,10 +209,7 @@ export async function runChat(
   jobMarkdown: string,
   analysisContext: string,
 ): Promise<ChatResult> {
-  // Chat only receives the rendered JD, not the ExtractedJob, so it seeds from
-  // that instead — stable across a conversation's turns, which is what the cache
-  // needs here, but a different partition from the analysis run for the same job.
-  const loaded = await loadConfigAndProfile(jobMarkdown)
+  const loaded = await loadConfigAndProfile()
   if (!loaded.ok) return loaded
 
   const messages: ChatMessage[] = []
