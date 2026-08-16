@@ -35,7 +35,7 @@
 
 ## Core Constraints
 
-- All LLM API calls are made from the **background service worker** — never from the content script or sidepanel directly.
+- LLM API calls never come from the content script. Analysis and resume run in the **offscreen document** (the sidepanel runs them locally on `chrome-prompt`); chat and the Qwen fetch bridge run in the **background service worker**. See the realm table in [architecture.md](architecture.md).
 - Communication between sidepanel ↔ background is **message-based** via `chrome.runtime.sendMessage`.
 - User profile, LLM config, and custom prompt are stored in `chrome.storage.local`.
 - Past analyses are stored in **IndexedDB** for large payload support.
