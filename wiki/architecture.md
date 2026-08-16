@@ -54,7 +54,7 @@ User → Job Page (LinkedIn / Greenhouse)
          ├── backend === 'anthropic' ───────────────────
          │     SSE fetch {base_url}/messages (API, gateway, or claude-proxy)
          │     anthropic-messages.ts translates the wire format both ways
-         │     x-claude-code-session-id pins the prompt cache per job
+         │     x-claude-code-session-id pins the prompt cache per LLM profile
          │     tool calls → same service worker fetch → PARSE_HTML path
          │
          ├── backend === 'chrome-prompt' ──────────────

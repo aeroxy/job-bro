@@ -461,8 +461,9 @@ export function SettingsForm({
                     <a href="https://github.com/aeroxy/claude-proxy" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">claude-proxy</a>.
                     The key goes out as <code className="text-[10px]">x-api-key</code>, and every request from
                     this profile carries one stable <code className="text-[10px]">x-claude-code-session-id</code>,
-                    so a proxy&rsquo;s prompt cache is reused across turns, runs and postings instead of
-                    being rewritten every call. Always streams, so &ldquo;Stream Timeout&rdquo; is the one that applies.
+                    so a proxy&rsquo;s prompt cache can be reused across turns, runs and postings wherever two
+                    requests share a prompt prefix — a job-specific system prompt still starts its own.
+                    Always streams, so &ldquo;Stream Timeout&rdquo; is the one that applies.
                   </p>
                 )}
               </div>

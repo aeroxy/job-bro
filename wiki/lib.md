@@ -174,18 +174,18 @@ Tracked as deferred work; low-priority because orphaned fetches are bounded by Q
 
 ## `agent.ts`
 
-Agent loop driver. Replaces the old `runWithValidation` for evaluator output. Lives in the service worker (or any extension page — it's pure TS).
+Agent loop driver. Replaces the old `runWithValidation` for evaluator output. Pure TS — runs in whichever realm called it; for analysis and resume that's the offscreen document (or the sidepanel on `chrome-prompt`).
 
-**Only the Cloud backend genuinely participates in the tool-calling loop.** Chrome short-circuits here because `resolveOutput` routes it to the inline-prompt path (Gemini Nano has no native tool API). Qwen short-circuits because it is itself an agent — forwarding our tool schemas would be meaningless.
+**Cloud and Anthropic both genuinely participate in the tool-calling loop** — Anthropic's `tool_use` blocks are re-serialised as OpenAI-shaped `tool_calls`, so the loop is backend-agnostic. Chrome short-circuits here because `resolveOutput` routes it to the inline-prompt path (Gemini Nano has no native tool API). Qwen short-circuits because it is itself an agent — forwarding our tool schemas would be meaningless.
 
 | Export | Purpose |
 |---|---|
-| `runAgent(config, messages, tools, handlers, options)` | Drives an OpenAI-style tool-calling loop: model → tool calls → append results → loop. Caps at `MAX_AGENT_ITERATIONS = 10`; research tools are stripped after `MAX_TOOL_ROUNDS = 5`. When `options.verdictName` is set, the matching `provide_verdict` call is intercepted as the in-house structured-output channel: its arguments become the returned JSON content, siblings are dropped from history, and the loop ends. If the model emits plain text instead of calling it, a nudge message is appended and the loop continues. |
-| `runAgentWithValidation<T>(config, messages, tools, handlers, validate, options)` | Wraps `runAgent` with a JSON-extract + validate step. On validation failure, appends the errors as a `role: 'tool'` message (referencing the `provide_verdict` call's `tool_call_id` when the structured-output channel is in play, otherwise a plain-text user turn) and re-runs the agent so the correction flows through the same channel. |
-| `executeTool(call, handlers, context)` | Generic dispatcher: looks up the tool by name in `handlers`, calls it with parsed args, returns the result. |
-| `ToolHandlerContext` | `{ signal: AbortSignal }` passed to handlers so they can compose with the caller's timeout. |
+| `runAgent(config, messages, options)` | Drives an OpenAI-style tool-calling loop: model → tool calls → append results → loop. Caps at `MAX_AGENT_ITERATIONS = 10`; research tools are stripped after `MAX_TOOL_ROUNDS = 5`. When `options.verdictName` is set, the matching `provide_verdict` call is intercepted as the in-house structured-output channel: its arguments become the returned JSON content, siblings are dropped from history, and the loop ends. If the model emits plain text instead of calling it, a nudge message is appended and the loop continues. |
+| `runAgentWithValidation<T>(config, messages, options & { validate })` | Wraps `runAgent` with a JSON-extract + validate step. On validation failure, appends the errors as a `role: 'tool'` message (referencing the `provide_verdict` call's `tool_call_id` when the structured-output channel is in play, otherwise a plain-text user turn) and re-runs the agent so the correction flows through the same channel. |
+| `executeTool(call, signal?)` | The default `ToolExecutor`: parses the call's arguments, switches on the tool name, returns the result as a string. |
+| `createCachedExecutor(base?)` | Wraps a `ToolExecutor` with a per-run cache so the same search/page isn't fetched twice within one analysis. |
 
-`handlers` is a `Map<string, ToolHandler>` (`(args, context) => Promise<unknown>`). Adding a new tool is: (1) add the schema in `tools/definitions.ts`, (2) add a handler in `tools/handlers.ts`, (3) register in the evaluator's `handlers` map. All 5 evaluators + summary use the same `ALL_TOOLS` set + a shared handler map built once per analysis.
+The executor is supplied through `options.executeTool` (`(call, signal?) => Promise<string>`) rather than a handlers map. Adding a new tool is: (1) add the schema in `tools/definitions.ts`, (2) add a branch in `executeTool`. All 5 evaluators + summary share the same `ALL_TOOLS` set and one cached executor built per analysis.
 
 ---
 
