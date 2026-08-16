@@ -8,7 +8,15 @@ LLM dispatcher. Routes to one of four backends based on `LLMConfig.backend`:
 - `'chrome-prompt'` — Chrome's built-in `LanguageModel` API (Gemini Nano), via [`chrome-ai-client.ts`](#chrome-ai-clientts).
 - `'qwen-chat'` — **Delegated agent**, not a model. Calls into [`qwen/qwen-service.ts`](#qwenqwen-servicets), which drives the user's live `chat.qwen.ai` session. Qwen runs its own native web search, read-page, and thinking on the server side — the extension's `WEB_SEARCH_TOOL` / `READ_PAGE_TOOL` are not sent. `chatCompletion` is reused as the dispatch entry point for API symmetry, but on this branch the semantics are "delegate task to agent", not "prompt a model".
 
-The dispatcher is pure TS and runs in the service worker. Cloud and Chrome are addressed via the same `chatCompletion` / `chatCompletionWithTools` surface; Chrome's window-only `LanguageModel` lives in the offscreen and is reached through `chrome-ai-client`. The Qwen branch is reached from the offscreen via a `QWEN_CHAT_REQUEST` message bridge to the background (the offscreen has no `chrome.cookies`).
+The dispatcher is pure TS and runs in whichever realm calls it — it is not service-worker-bound:
+
+| Flow | Realm |
+|---|---|
+| Analysis / resume, any backend but `chrome-prompt` | **Offscreen document.** The sidepanel sends `ANALYZE_JD` to the background, which relays it as `OFFSCREEN_ANALYZE_JD`; the offscreen runs `runAnalysis` end to end, free of service-worker lifetime limits — which is also what lets the Anthropic path hold an SSE stream open through a long think. |
+| Analysis / resume, `chrome-prompt` | **Sidepanel window**, locally (`useTabSessions` imports `runAnalysis` directly). |
+| Chat | **Service worker** (`CHAT_REQUEST` → `runChat`), except on `chrome-prompt`, which the sidepanel handles itself. |
+
+Cloud, Anthropic and Chrome are addressed via the same `chatCompletion` / `chatCompletionWithTools` surface; Chrome's window-only `LanguageModel` lives in the offscreen and is reached through `chrome-ai-client`. The Qwen branch is reached from the offscreen via a `QWEN_CHAT_REQUEST` message bridge to the background (the offscreen has no `chrome.cookies`).
 
 ### `chatCompletion(config, messages, options)`
 
@@ -38,9 +46,9 @@ Options:
 
 **Concurrency:** both Cloud and Qwen go through the per-provider `RequestQueue` (`getQueue(key).run(concurrency, fn)`), `config.concurrency ?? 2`. Cloud keys by `base_url`; Qwen keys by the constant `'qwen-chat'` (it has no `base_url`). The queue lives in the calling realm — for the analysis path that's the **offscreen**, so it caps how many of the 6 evaluators hit `chat.qwen.ai` in parallel before they fan out to the background via `QWEN_CHAT_REQUEST`. This is the primary defense against Qwen's anti-bot burst throttle; a request mid-back-off (see anti-bot retry below) keeps holding its slot, applying backpressure. Chrome (`chrome-prompt`) is serialized separately by the offscreen's own FIFO and skips this queue.
 
-### `chatCompletionWithTools(config, messages, tools, options)`
+### `chatCompletionWithTools(config, messages, options)`
 
-Tool-call variant for the keyed HTTP backends. On **Cloud** it is non-streaming and `tools` is forwarded as `body.tools`; on **Anthropic** it streams and the tools are translated to Anthropic's `input_schema` shape. Either way the response may include `tool_calls`, returned as a `ChatCompletionWithToolsResult` (`{ content, tool_calls, raw }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` and `name` for tool results).
+Tool-call variant for the keyed HTTP backends. Tools arrive in `options.tools` (alongside `tool_choice`, `jsonSchema`, `signal`, `temperature`, `max_tokens`) — there is no separate `tools` argument. On **Cloud** the call is non-streaming and `options.tools` is forwarded as `body.tools`; on **Anthropic** it streams and the tools are translated to Anthropic's `input_schema` shape. Either way the response may include `tool_calls`, returned as a `ChatCompletionWithToolsResult` (`{ content, tool_calls?, reasoning_blocks? }`). The `role` of `ChatMessage` extends to include `'tool'` (with `tool_call_id` for tool results).
 
 Two backends short-circuit here:
 
@@ -77,7 +85,7 @@ After the stream, `stop_reason: 'refusal'` throws with the `stop_details` catego
 Pure translation between the OpenAI-shaped `ChatMessage` / `ToolDefinition` types and Anthropic's Messages API. No fetch, no retry — that policy stays in `llm-client.ts`.
 
 - `toAnthropicMessages` — hoists `system` turns into the top-level field (Anthropic rejects a system message anywhere else), turns `tool` turns into `tool_result` blocks on a **user** turn, and assistant `tool_calls` into `tool_use` blocks. Same-role turns are merged, which is what puts a whole round of parallel tool results into one user turn — splitting them teaches the model to stop calling tools in parallel. If the result *ends* on an assistant turn, its last text block is `trimEnd`ed: Anthropic reads a trailing assistant turn as a prefill and rejects one ending in whitespace. No current caller does that (the agent loop always appends a tool result or a user nudge), so it's a no-op today — but only that one block is touched, since trimming every assistant turn would silently edit history the model already produced.
-- `buildAnthropicBody` — required `max_tokens`; `system` as a one-block array carrying a `cache_control: {type:'ephemeral'}` breakpoint (it's the custom prompt + resume + preferences, the largest constant in the request); `temperature` omitted unless configured (Opus 5 / Sonnet 5 / Opus 4.7+ reject it outright); `output_config.format` for strict JSON; tools mapped to `{name, description, input_schema}`.
+- `buildAnthropicBody` — required `max_tokens`; `system` as a one-block array carrying a `cache_control: {type:'ephemeral'}` breakpoint (it's the custom prompt + resume + preferences, the largest constant in the request); `temperature` omitted unless configured (Opus 4.7+ and Sonnet 5 reject a non-default value, and any model rejects one while thinking is on — which Opus 5 is by default, so in practice leaving it unset is the only safe setting there); `output_config.format` for strict JSON; tools mapped to `{name, description, input_schema}`.
 - `readAnthropicResponse` — text blocks joined, `tool_use` blocks re-serialised as `tool_calls` (arguments back to a JSON string), plus `stop_reason` and a flattened `stop_details`. It also returns **`reasoning_blocks`**: the turn's `thinking` / `redacted_thinking` blocks verbatim. Those are mandatory to replay — when thinking is on (and **Claude Opus 5 thinks by default**, with no `thinking` field sent) the API rejects a `tool_result` whose assistant turn has lost its thinking blocks, on ordering/signature grounds. So `signature_delta` is accumulated rather than ignored, `redacted_thinking`'s `data` is read off its start event, and both ride the transcript as an opaque `ChatMessage.reasoning_blocks` that only this module produces or consumes — `toAnthropicMessages` emits them at the head of the assistant turn, where Anthropic requires them. A thinking block that arrived **without** a signature (a proxy that strips it) is dropped rather than echoed, since an unsigned block is itself a 400; that reproduces the pre-fix behaviour instead of guaranteeing a failure. The field is `undefined` on every other backend, so `JSON.stringify` omits it and nothing extra reaches an OpenAI endpoint.
 - Stream folding — `newAnthropicStreamState` / `applyAnthropicStreamEvent` / `finishAnthropicStream`. Needed because a `tool_use` block's arguments arrive as `input_json_delta` fragments that are only valid JSON once concatenated; `finishAnthropicStream` collapses the accumulated blocks into the non-streaming response shape so `readAnthropicResponse` is the only place that interprets a reply. Malformed/truncated tool JSON becomes `{}` rather than dropping the call — the transcript still lines up with its `tool_result`.
 
@@ -216,7 +224,7 @@ Shared HTML→markdown pipeline used by the offscreen to service the agent tools
 
 ## `llm-handlers.ts`
 
-Orchestration glue. Always runs in the service worker. The Chrome backend now flows through `chrome-ai-client` instead of calling `LanguageModel` directly.
+Orchestration glue. Runs wherever it is called from — `runAnalysis` / `runResume` in the offscreen document (or the sidepanel on `chrome-prompt`), `runChat` in the service worker; see the realm table under [`llm-client.ts`](#llm-clientts). The Chrome backend flows through `chrome-ai-client` instead of calling `LanguageModel` directly.
 
 | Export | Returns | Used by |
 |---|---|---|
