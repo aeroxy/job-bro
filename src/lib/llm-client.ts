@@ -50,7 +50,10 @@ const DEFAULT_MAX_TOKENS = 8192
 // SSE). Delays are indexed by attempt, so the array length is also the retry
 // budget: `attempt <= HTTP_RETRY_DELAYS.length` gives 3 tries total.
 const HTTP_RETRY_DELAYS = [3000, 10000]
-const RETRYABLE_STATUS = [429, 500, 502, 503, 504]
+// 529 is Anthropic's `overloaded_error` — documented as retryable, and the one
+// status a healthy key hits under load. 408 is deliberately absent: an
+// intermediary's request-timeout says nothing about whether replaying is safe.
+const RETRYABLE_STATUS = [429, 500, 502, 503, 504, 529]
 
 function isRetryableStatus(status: number): boolean {
   return RETRYABLE_STATUS.includes(status)
@@ -257,6 +260,13 @@ export async function chatCompletion(
   // Anthropic Messages backend. Same bring-your-own-key shape as the OpenAI
   // path — the API itself, a gateway, or a local claude-proxy all work — only
   // the wire format differs, and `anthropic-messages.ts` translates it.
+  //
+  // `options.json_mode` is intentionally not forwarded. It maps to OpenAI's
+  // `response_format: {type:'json_object'}` — a schema-less "must be JSON"
+  // switch the Messages API has no equivalent for; there, structured output is
+  // `output_config.format` with a full json_schema, which this path does send
+  // when a caller supplies one (see chatCompletionWithTools → jsonSchema).
+  // Every caller of this function passes json_mode: false anyway.
   if (config.backend === 'anthropic') {
     return getQueue(config.base_url).run(
       config.concurrency ?? 2,
@@ -722,6 +732,13 @@ async function anthropicRequest(
   const text = stripThinkBlock(content)
   if (!text && !tool_calls) {
     if (stopReason === 'max_tokens') throw new Error(truncatedMessage(bodyOptions.max_tokens))
+    // Distinct from max_tokens: the *input* filled the context window, so
+    // raising Max Tokens makes it worse, not better.
+    if (stopReason === 'model_context_window_exceeded') {
+      throw new Error(
+        'The job posting plus your profile exceeded the model’s context window. Shorten the resume/projects fields in Profile, or pick a model with a larger context window.'
+      )
+    }
     throw new Error('LLM returned empty response')
   }
   return { content: text, tool_calls, reasoning_blocks }

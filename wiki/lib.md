@@ -34,7 +34,7 @@ Options:
 **Truncation handling:** when the response has `finish_reason: 'length'` and no usable output (empty content, no tool_calls), the client throws an actionable error ("Raise Max Tokens in settings") instead of returning `''` and tripping a downstream JSON parse error. Applies to all three paths (non-stream, tools, stream).
 
 **Retry behavior:** one policy, shared by all four HTTP loops (non-stream, stream, tools, Anthropic SSE) via the module-level `HTTP_RETRY_DELAYS` / `RETRYABLE_STATUS` / `isRetryableStatus`.
-- HTTP 429 / 500 / 502 / 503 / 504: retried with delays `[3s, 10s]` — 3 attempts total.
+- HTTP 429 / 500 / 502 / 503 / 504 / 529: retried with delays `[3s, 10s]` — 3 attempts total. 529 is Anthropic's `overloaded_error`; 408 is deliberately excluded (an intermediary's request timeout says nothing about whether a replay is safe).
 - Transient network errors (`fetch` `TypeError`, our own `TimeoutError`): retried on the same schedule. A **user abort** (`signal.aborted`) and the `Error`s this module throws itself are not.
 - **Anthropic only:** a failure is additionally only retried while no SSE event has been delivered yet — see `postSSE` below.
 
@@ -76,7 +76,9 @@ Headers:
 
 A non-2xx body is unwrapped by `anthropicErrorText` before it becomes an `Error`: Anthropic answers `{"type":"error","error":{"type","message"}}`, and the envelope would otherwise land verbatim in the sidepanel's error card, burying the one useful sentence (most visibly for the 400s a user can cause — an explicit `temperature`, an unsupported `output_config`). A non-JSON body, e.g. a gateway's HTML page, passes through unchanged.
 
-After the stream, `stop_reason: 'refusal'` throws with the `stop_details` category/explanation; an empty result with `stop_reason: 'max_tokens'` throws the shared truncation message.
+After the stream, `stop_reason: 'refusal'` throws with the `stop_details` category/explanation. An empty result is then split by stop reason: `max_tokens` throws the shared truncation message ("raise Max Tokens"), while `model_context_window_exceeded` throws its own — the *input* filled the window, so raising Max Tokens makes it worse, and the fix is a shorter profile or a bigger model.
+
+`options.json_mode` is deliberately dropped on this path. It maps to OpenAI's schema-less `response_format: {type:'json_object'}`, which the Messages API has no equivalent for — structured output there is `output_config.format` with a full schema, which *is* sent when a caller supplies `jsonSchema`. Every current caller of `chatCompletion` passes `json_mode: false`.
 
 ---
 
