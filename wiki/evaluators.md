@@ -239,11 +239,11 @@ The runner resolves an output strategy per evaluator via `resolveOutput()`:
 
 | Path | When | How |
 |---|---|---|
-| **Strict json_schema** | `structured_output === true` AND evaluator has no research tools | `response_format.json_schema` (`openai`) / `output_config.format` (`anthropic`) enforces shape server-side. No structured-output channel, no parse/retry. |
+| **Strict json_schema** | `structured_output === true` AND evaluator has no research tools | `response_format.json_schema` (`openai`) / `output_config.format` (`anthropic`) enforces shape server-side, so no `provide_verdict` channel is appended. `runAgentWithValidation` still parses the JSON, runs the evaluator's `validate`, and retries once on failure — the server guarantees the shape, not the semantics. |
 | **In-house structured-output channel** (`provide_verdict`) | Otherwise (broad: any evaluator when structured_output off, or tool-using evaluators always) | The model "calls" `provide_verdict` with the verdict object as its arguments. The agent loop intercepts the call as the final answer (no handler runs, no tool result is produced for the model to read). |
 | **Chrome / Qwen backend** | `chrome-prompt` / `qwen-chat` | No tools, no json_schema. Inline-prompt + parseJSON. |
 
-`resolveOutput` treats `anthropic` exactly like `openai` — both tool-call and both support strict schemas, so the same three paths apply.
+`resolveOutput` treats `anthropic` exactly like `openai` — both tool-call and both accept a strict schema, so the same three paths apply. Whether `output_config.format` is actually honoured depends on the model and on what sits in front of it: an older model, a gateway, or a proxy may reject it, and `llm-client` only ever sends it when the tools array is empty (Anthropic won't take the two together). A rejection arrives as a 400, unwrapped by `anthropicErrorText` so the reason reaches the error card instead of the raw envelope.
 
 The structured-output channel is the fallback for evaluators that can't use strict json_schema — namely any evaluator when `structured_output` is off, and tool-using evaluators (risk, salary, growth, preference) even when `structured_output` is on (strict json_schema blocks `tool_calls`).
 
