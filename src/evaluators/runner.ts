@@ -103,8 +103,11 @@ function resolveTools(config: LLMConfig, evaluator: EvaluatorName): ToolDefiniti
 //                              delegated agent with native server-side tools;
 //                              both use the inline-prompt path).
 //   2. Strict json_schema    → when structured_output is on AND the evaluator
-//                              has no research tools. Server enforces shape;
-//                              no structured-output channel, no parse/retry.
+//                              has no research tools. Server enforces shape,
+//                              so no verdict channel is appended — but
+//                              runAgentWithValidation still parses and
+//                              validates (shape is guaranteed, semantics are
+//                              not).
 //   3. In-house structured   → otherwise. `provide_verdict` is appended to
 //      output channel           the tools array as a fake tool declaration
 //                              whose `parameters` ARE the evaluator's JSON
